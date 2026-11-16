@@ -18,7 +18,7 @@ type Form = {
 
 /** datetime-local inputs use "YYYY-MM-DDTHH:mm"; we store "YYYY-MM-DD HH:mm". */
 const toInput = (s: string) => s.replace(' ', 'T');
-const fromInput = (s: string) => s.replace('T', ' ');
+const fromInput = (s: string) => s.replace('T', ' ').slice(0, 16); // drop seconds if the browser adds them
 
 const emptyForm = (): Form => ({
   type: 'Send Money',
@@ -36,7 +36,7 @@ export function Review({ file, id, onDone }: { file?: File; id?: number; onDone:
   const [rawText, setRawText] = useState('');
   const [form, setForm] = useState<Form>(emptyForm);
   const [scanning, setScanning] = useState(Boolean(file));
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState('');
   const [notice, setNotice] = useState('');
   const [showRaw, setShowRaw] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -79,7 +79,7 @@ export function Review({ file, id, onDone }: { file?: File; id?: number; onDone:
 
   const scan = (img: Blob) => {
     setScanning(true);
-    setProgress(0);
+    setProgress('');
     setNotice('');
     runScan(img);
   };
@@ -127,7 +127,8 @@ export function Review({ file, id, onDone }: { file?: File; id?: number; onDone:
         phone: form.phone.trim(),
         txnDate: form.txnDate.trim(),
         note: form.note.trim(),
-        image: image && imageChanged ? await compressForStorage(image) : image,
+        // If compression fails for any reason, keep the original image rather than failing the save.
+        image: image && imageChanged ? await compressForStorage(image).catch(() => image) : image,
         rawText,
       };
       if (id !== undefined) await updateTxn(id, data);
@@ -200,7 +201,7 @@ export function Review({ file, id, onDone }: { file?: File; id?: number; onDone:
 
         {scanning ? (
           <div className="notice">
-            <span className="spinner" /> Reading receipt… {progress > 0 ? `${progress}%` : ''}
+            <span className="spinner" /> {progress || 'Reading receipt…'}
           </div>
         ) : (
           notice && <div className="notice">{notice}</div>
@@ -234,7 +235,7 @@ export function Review({ file, id, onDone }: { file?: File; id?: number; onDone:
           <textarea className="input" rows={3} placeholder="What was this for?" value={form.note} onChange={(e) => set('note', e.target.value)} />
         </Field>
 
-        <button className="btn primary block" onClick={save} disabled={saving || scanning}>
+        <button className="btn primary block" onClick={save} disabled={saving}>
           {saving ? 'Saving…' : id !== undefined ? 'Save Changes' : 'Save Transaction'}
         </button>
         {id !== undefined && (

@@ -1,4 +1,4 @@
-import { db, type Txn } from './db';
+import { addTxn, listTxns, type Txn } from './db';
 
 function download(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -20,7 +20,7 @@ const csvCell = (v: string | number) => {
 
 /** Spreadsheet-friendly export (opens in Excel / Google Sheets). Images are not included. */
 export async function exportCsv() {
-  const rows = await db.txns.orderBy('txnDate').toArray();
+  const rows = (await listTxns()).reverse(); // oldest first
   const header = ['Date', 'Type', 'Amount', 'Reference No.', 'Name / Merchant', 'Mobile', 'Note'];
   const lines = [
     header.join(','),
@@ -46,7 +46,7 @@ type BackupRow = Omit<Txn, 'id' | 'image'> & { image: string | null };
 
 /** Full backup including receipt images, to restore on this or another phone. */
 export async function exportBackup() {
-  const rows = await db.txns.toArray();
+  const rows = await listTxns();
   const out: BackupRow[] = [];
   for (const { id: _id, image, ...rest } of rows) {
     out.push({ ...rest, image: image ? await blobToDataUrl(image) : null });
@@ -61,7 +61,7 @@ export async function importBackup(file: File): Promise<{ added: number; skipped
   if (data?.app !== 'gcash-tracker' || !Array.isArray(data.txns)) {
     throw new Error('This is not a GCash Tracker backup file.');
   }
-  const existing = await db.txns.toArray();
+  const existing = await listTxns();
   const key = (t: { refNo: string; txnDate: string; amount: number }) => `${t.refNo}|${t.txnDate}|${t.amount}`;
   const seen = new Set(existing.map(key));
   let added = 0;
@@ -71,8 +71,9 @@ export async function importBackup(file: File): Promise<{ added: number; skipped
       skipped++;
       continue;
     }
+    const { createdAt, ...rest } = row;
     const image = row.image ? await (await fetch(row.image)).blob() : null;
-    await db.txns.add({ ...row, image } as Txn);
+    await addTxn({ ...rest, image }, createdAt);
     seen.add(key(row));
     added++;
   }

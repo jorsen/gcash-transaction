@@ -1,15 +1,31 @@
-/** Loads an image file, applying its EXIF orientation, and draws it scaled to fit maxSide. */
+type Source = { img: CanvasImageSource; width: number; height: number; close: () => void };
+
+/** Decodes an image file, applying its EXIF orientation. Falls back to <img> where createImageBitmap fails (older Safari). */
+async function decode(file: Blob): Promise<Source> {
+  try {
+    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    return { img: bmp, width: bmp.width, height: bmp.height, close: () => bmp.close() };
+  } catch {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    return { img, width: img.naturalWidth, height: img.naturalHeight, close: () => URL.revokeObjectURL(url) };
+  }
+}
+
+/** Draws an image file scaled to fit maxSide. */
 async function drawScaled(file: Blob, maxSide: number): Promise<HTMLCanvasElement> {
-  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
-  const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+  const src = await decode(file);
+  const scale = Math.min(1, maxSide / Math.max(src.width, src.height));
   const canvas = document.createElement('canvas');
-  canvas.width = Math.round(bmp.width * scale);
-  canvas.height = Math.round(bmp.height * scale);
+  canvas.width = Math.round(src.width * scale);
+  canvas.height = Math.round(src.height * scale);
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-  bmp.close();
+  ctx.drawImage(src.img, 0, 0, canvas.width, canvas.height);
+  src.close();
   return canvas;
 }
 
