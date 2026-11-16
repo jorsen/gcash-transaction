@@ -1,4 +1,5 @@
 import { neon } from '@neondatabase/serverless';
+import { normalizeMaskedName } from '../src/parseGcash.js';
 
 export type QueryFn = <T = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<T[]>;
 
@@ -119,10 +120,31 @@ const SCHEMA = [
 ];
 
 /** Creates tables on first use (idempotent), so there is no separate migration step. */
+/**
+ * One-time data fix: names saved before the masked-name cleanup have OCR junk where GCash shows
+ * dots ("AleeeN C." -> "AL•••N C."). Runs once per database; safe to repeat (idempotent).
+ */
+async function fixMaskedNamesOnce(q: QueryFn) {
+  const done = await q(`SELECT 1 FROM app_settings WHERE key = 'fix_masked_names_v1'`);
+  if (done.length) return;
+  const txns = await q<{ id: number; recipient: string }>(`SELECT id, recipient FROM transactions WHERE recipient <> ''`);
+  for (const t of txns) {
+    const fixed = normalizeMaskedName(t.recipient);
+    if (fixed !== t.recipient) await q(`UPDATE transactions SET recipient = $1 WHERE id = $2`, [fixed, t.id]);
+  }
+  const reqs = await q<{ id: number; gcash_name: string }>(`SELECT id, gcash_name FROM cashin_requests`);
+  for (const r of reqs) {
+    const fixed = normalizeMaskedName(r.gcash_name).toUpperCase(); // GCash names are all capitals
+    if (fixed !== r.gcash_name) await q(`UPDATE cashin_requests SET gcash_name = $1 WHERE id = $2`, [fixed, r.id]);
+  }
+  await q(`INSERT INTO app_settings (key, value) VALUES ('fix_masked_names_v1', NOW()::text) ON CONFLICT (key) DO NOTHING`);
+}
+
 function ensureSchema() {
   schemaReady ??= (async () => {
     const q = getQuery();
     for (const stmt of SCHEMA) await q(stmt);
+    await fixMaskedNamesOnce(q);
   })().catch((e) => {
     schemaReady = null;
     throw e;

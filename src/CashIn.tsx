@@ -54,14 +54,14 @@ async function copyText(text: string) {
   }
 }
 
-/** Shows a GCash-style masked name with the hidden letters (*) dimmed, so the visible letters stand out. */
-export function MaskedName({ name }: { name: string }) {
+/** Shows a GCash-style masked name with the hidden letters (• or *) dimmed, so the visible letters stand out. */
+export function MaskedName({ name, className = 'masked-name' }: { name: string; className?: string }) {
   return (
-    <span className="masked-name">
-      {[...name.toUpperCase()].map((ch, i) =>
-        ch === '*' ? (
+    <span className={className}>
+      {[...name].map((ch, i) =>
+        ch === '*' || ch === '•' ? (
           <span key={i} className="mask-char">
-            *
+            •
           </span>
         ) : (
           ch
@@ -298,7 +298,7 @@ export function CashIn({
             <span className="label">GCash name</span>
             <input
               className="input mono"
-              placeholder="e.g. JU** DE* C."
+              placeholder="e.g. JU•• DE•A C."
               value={form.gcashName}
               onChange={(e) => {
                 setAutoFilled(false);
@@ -313,7 +313,7 @@ export function CashIn({
             {autoFilled ? (
               <span className="hint known">Filled in from this customer's last transaction. Check it matches GCash.</span>
             ) : (
-              <span className="hint">Type it as GCash shows it. Hidden letters can be typed as *.</span>
+              <span className="hint">Type it as GCash shows it. Type hidden letters as * (saved as • like in GCash).</span>
             )}
             {knownNames.some((n) => n !== form.gcashName) && (
               <span className="known-names">

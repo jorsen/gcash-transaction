@@ -302,7 +302,7 @@ export function Review({
               <input className="input" type="datetime-local" value={toInput(form.txnDate)} onChange={(e) => set('txnDate', fromInput(e.target.value))} />
             </Field>
             <Field label="Name / Merchant">
-              <input className="input" placeholder="e.g. JU** DE* C." value={form.recipient} onChange={(e) => set('recipient', e.target.value)} />
+              <input className="input" placeholder="e.g. JU•• DE•A C." value={form.recipient} onChange={(e) => set('recipient', e.target.value)} />
             </Field>
             <Field label="Mobile number">
               <input className="input" type="tel" placeholder="+63 9XX XXX XXXX" value={form.phone} onChange={(e) => set('phone', e.target.value)} />

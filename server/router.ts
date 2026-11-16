@@ -1,4 +1,4 @@
-import { TXN_TYPES } from '../src/parseGcash.js';
+import { normalizeMaskedName, TXN_TYPES } from '../src/parseGcash.js';
 import {
   createSession,
   currentUser,
@@ -139,7 +139,7 @@ function cleanTxn(b: TxnBody) {
     type: b.type,
     amount: Math.round(amount * 100) / 100,
     refNo: s(b.refNo, 40).replace(/\s+/g, ''),
-    recipient: s(b.recipient, 120),
+    recipient: normalizeMaskedName(s(b.recipient, 120)),
     phone: s(b.phone, 30),
     txnDate,
     note: s(b.note, 1000),
@@ -495,7 +495,8 @@ async function route(req: Request): Promise<Response> {
     const b = await body<{ number: string; gcashName: string; amount?: number | string | null; note?: string; businessId?: number }>(req);
     const businessId = businessScope(me, b.businessId);
     const number = cleanMobile(b.number);
-    const gcashName = String(b.gcashName ?? '').trim().replace(/\s+/g, ' ');
+    // Typed asterisks / OCR junk become GCash-style dots: "JU** DE*A C." -> "JU•• DE•A C."
+    const gcashName = normalizeMaskedName(String(b.gcashName ?? '')).toUpperCase();
     if (!gcashName || gcashName.length > 80) throw new HttpError(400, 'Enter the GCash name (asterisks are OK, e.g. JU** DE* C.).');
     let amount: number | null = null;
     if (b.amount !== undefined && b.amount !== null && String(b.amount).trim() !== '') {

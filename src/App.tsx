@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'reac
 import { api, imageUrl, setUnauthorizedHandler, type StaffUser, type Summary, type Txn, type User } from './api';
 import { exportCsv, uploadLocalRecords } from './backup';
 import { Businesses } from './Businesses';
-import { CashIn } from './CashIn';
+import { CashIn, MaskedName } from './CashIn';
 import { countLocal } from './db';
 import { isIncoming, peso } from './format';
 import { useLiveStamp } from './live';
@@ -507,7 +507,7 @@ function Home({
                             </span>
                           )}
                           <span className="row-main">
-                            <span className="row-title">{t.recipient || t.type}</span>
+                            {t.recipient ? <MaskedName name={t.recipient} className="row-title" /> : <span className="row-title">{t.type}</span>}
                             <span className="row-sub">
                               {t.type} · {timeLabel(t.txnDate)}
                               {t.refNo ? ` · Ref ${t.refNo}` : ''}

@@ -151,6 +151,50 @@ function parseRecipient(lines: string[], phoneLineIdx: number): string {
   return '';
 }
 
+/** The character GCash uses to hide letters in names, e.g. "AL•••N C." */
+export const MASK = '•';
+
+/** Tall lowercase letters are real letters misread in lowercase (e.g. "l" in "AleeeN" is an L), not dots. */
+const TALL = /[bdfhiklt]/;
+
+/** True if this word looks like a GCash-masked word that OCR garbled: Capitals, then junk, then a Capital. */
+function looksMasked(core: string) {
+  return /^[A-Z][A-Z]*[^A-Z\s]+[A-Z0]/.test(core) || /^[A-Z]+[*•·.\-<>¢°~_]+$/.test(core);
+}
+
+function fixMaskedWord(word: string): string {
+  // Keep a trailing initial dot / comma ("C." / "C,") as written.
+  const m = word.match(/^(.*?)([.,]?)$/);
+  let core = m?.[1] ?? word;
+  const tail = m?.[2] === ',' ? '.' : (m?.[2] ?? '');
+  if (!/^[A-Z]/.test(core) || /^[A-Z]+$/.test(core)) return core + tail;
+  // A 0 at the very end of a masked word is an O ("RO••0" -> "RO••O").
+  core = core.replace(/0$/, 'O');
+  let i = 1;
+  while (i < core.length && /[A-Z]/.test(core[i])) i++;
+  // Lowercase tall letters right after the visible start are real letters ("Al…" -> "AL…").
+  while (i < core.length && TALL.test(core[i])) i++;
+  let j = core.length;
+  while (j > i && /[A-Z]/.test(core[j - 1])) j--;
+  const prefix = core.slice(0, i).toUpperCase();
+  const middle = core.slice(i, j);
+  const suffix = core.slice(j);
+  return prefix + MASK.repeat(middle.length) + suffix + tail;
+}
+
+/**
+ * GCash hides most letters of a person's name with dots ("AL•••N C."). OCR reads those dots as
+ * stray characters ("AleeeN C.", "CHe..<<R", "JO-N B."). This turns them back into dots, but only for
+ * names that look masked, so normal merchant names ("Meralco") are left alone.
+ */
+export function normalizeMaskedName(name: string): string {
+  const trimmed = name.trim().replace(/\s+/g, ' ');
+  const words = trimmed.split(' ');
+  const masked = words.some((w) => looksMasked(w.replace(/[.,]$/, '')) || /[*•]/.test(w));
+  if (!masked) return trimmed;
+  return words.map((w) => fixMaskedWord(w.replace(/\*/g, MASK))).join(' ');
+}
+
 export function parseGcashReceipt(rawText: string): ParsedReceipt {
   const lines = rawText
     .split(/\r?\n/)
@@ -166,7 +210,7 @@ export function parseGcashReceipt(rawText: string): ParsedReceipt {
     amount: parseAmount(lines),
     refNo: parseRefNo(text),
     txnDate: parseDate(text),
-    recipient: parseRecipient(lines, phoneIdx),
+    recipient: normalizeMaskedName(parseRecipient(lines, phoneIdx)),
     phone,
   };
 }
