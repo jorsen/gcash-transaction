@@ -65,3 +65,33 @@ npx tsc --noEmit
 npx expo lint
 npx expo-doctor
 ```
+
+---
+
+# Web app (installable PWA): `web/`
+
+The same app as a website you can **install to the home screen** on Android and iPhone.
+No APK and no app store needed.
+
+- **Capture / From Gallery** use the browser's camera and photo picker.
+- **OCR runs in the browser** (Tesseract.js). The first scan downloads the English text model
+  (a few MB, cached afterwards). Receipt images never leave the device.
+- **Data stays on the phone** in the browser's IndexedDB. Images are shrunk to about 150 KB each.
+- **Menu (⋮):** export to Excel (CSV), back up everything including images (JSON), and restore a backup
+  on this or another phone.
+- Reuses the native app's receipt parser (`src/lib/parseGcash.ts`).
+
+```bash
+cd web
+npm install
+npm run dev       # http://localhost:5173 (also reachable from a phone on the same Wi-Fi)
+npm run build     # static site in web/dist
+```
+
+The camera, installing, and offline mode need **HTTPS**, so test those on the deployed site.
+
+## Deploy (Vercel, free)
+
+1. Go to vercel.com → **Add New → Project** → import `jorsen/gcash-transaction` from GitHub.
+2. Set **Root Directory** to `web` (Vercel detects Vite automatically).
+3. Click **Deploy**. Every push to `main` redeploys automatically.

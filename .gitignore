@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Tesseract language data cached by local OCR tests
+*.traineddata
