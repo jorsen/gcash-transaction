@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api, type Business, type User } from './api';
 import { PasswordInput } from './PasswordInput';
+import { ActionSheet, Avatar, Icon, SkeletonRows, useUi } from './ui';
 
 /** Super admin home: all businesses, add a business (with its first owner), activate/deactivate. */
 export function Businesses({
@@ -14,6 +15,7 @@ export function Businesses({
   onChangePassword: () => void;
   onLogout: () => void;
 }) {
+  const ui = useUi();
   const [items, setItems] = useState<Business[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -41,9 +43,12 @@ export function Businesses({
     setBusy(true);
     try {
       await api.addBusiness(form);
-      alert(
-        `Business "${form.name}" created.\n\nOwner login:\nUsername: ${form.ownerUsername.trim().toLowerCase()}\nPassword: ${form.ownerPassword}\n\nGive these to ${form.ownerName}.`,
-      );
+      await ui.info({
+        title: `${form.name} created`,
+        message: `Give these owner login details to ${form.ownerName}:`,
+        copyText: `Username: ${form.ownerUsername.trim().toLowerCase()}\nPassword: ${form.ownerPassword}`,
+        confirmText: 'Done',
+      });
       setForm({ name: '', ownerName: '', ownerUsername: '', ownerPassword: '' });
       setShowAdd(false);
       load();
@@ -57,25 +62,33 @@ export function Businesses({
   const toggleActive = async (b: Business) => {
     if (
       b.active &&
-      !confirm(`Deactivate "${b.name}"?\n\nIts owners and tinderas are logged out and can't log in until you activate it again. Its records are kept.`)
+      !(await ui.confirm({
+        title: `Deactivate ${b.name}?`,
+        message: "Its owners and tinderas are logged out and can't log in until you activate it again. Its records are kept.",
+        confirmText: 'Deactivate',
+        danger: true,
+      }))
     )
       return;
     try {
       await api.updateBusiness(b.id, { active: !b.active });
+      ui.toast(b.active ? `${b.name} deactivated` : `${b.name} activated`, 'info');
       load();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      ui.toast(err instanceof Error ? err.message : String(err), 'error');
     }
   };
 
   const rename = async (b: Business) => {
-    const name = prompt('Business name:', b.name)?.trim();
+    const v = await ui.ask({ title: 'Rename business', fields: [{ name: 'name', label: 'Business name', value: b.name }], confirmText: 'Save' });
+    const name = v?.name.trim();
     if (!name || name === b.name) return;
     try {
       await api.updateBusiness(b.id, { name });
+      ui.toast('Business renamed');
       load();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      ui.toast(err instanceof Error ? err.message : String(err), 'error');
     }
   };
 
@@ -86,30 +99,34 @@ export function Businesses({
           <h1>Businesses</h1>
           <small>{user.name} · Super admin</small>
         </div>
-        <div className="menu-wrap">
-          <button className="icon-btn" aria-label="Menu" onClick={() => setMenuOpen((o) => !o)}>
-            ⋮
-          </button>
-          {menuOpen && (
-            <>
-              <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />
-              <div className="menu" onClick={() => setMenuOpen(false)}>
-                <button onClick={onChangePassword}>Change password</button>
-                <button onClick={onLogout}>Log out</button>
-              </div>
-            </>
-          )}
-        </div>
+        <button className="avatar-btn" aria-label="Account" onClick={() => setMenuOpen(true)}>
+          <Avatar name={user.name} size={36} />
+        </button>
       </header>
 
       <main className="content">
+        {menuOpen && (
+          <ActionSheet
+            title={`${user.name} · Super admin`}
+            onClose={() => setMenuOpen(false)}
+            actions={[
+              { icon: 'key', label: 'Change password', onClick: onChangePassword },
+              { icon: 'logout', label: 'Log out', onClick: onLogout },
+            ]}
+          />
+        )}
         {!showAdd ? (
           <button className="btn primary block" onClick={() => setShowAdd(true)}>
-            ＋ Add business
+            <Icon name="plus" size={20} /> Add business
           </button>
         ) : (
           <form className="card form" onSubmit={add}>
-            <h2>New business</h2>
+            <div className="card-head">
+              <h2>New business</h2>
+              <button type="button" className="icon-btn subtle" aria-label="Close" onClick={() => setShowAdd(false)}>
+                <Icon name="close" size={18} />
+              </button>
+            </div>
             <label className="field">
               <span className="label">Business name</span>
               <input className="input" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Rosa Sari-Sari Store" required />
@@ -155,9 +172,7 @@ export function Businesses({
             </button>
           </div>
         ) : loading ? (
-          <div className="center">
-            <span className="spinner big" />
-          </div>
+          <SkeletonRows count={3} />
         ) : items.length === 0 ? (
           <p className="empty">No businesses yet.{'\n'}Add the first one above.</p>
         ) : (
@@ -165,6 +180,9 @@ export function Businesses({
             {items.map((b) => (
               <li key={b.id} className={`staff-row ${b.active ? '' : 'inactive'}`}>
                 <button className="biz-open" onClick={() => onOpen(b)} disabled={!b.active}>
+                  <span className="biz-icon">
+                    <Icon name="store" size={22} />
+                  </span>
                   <span className="row-main">
                     <span className="row-title">
                       {b.name} {!b.active && <span className="badge muted-badge">Deactivated</span>}
@@ -175,13 +193,13 @@ export function Businesses({
                       {b.txnCount === 1 ? '' : 's'}
                     </span>
                   </span>
-                  {b.active && <span className="chevron">›</span>}
+                  {b.active && <Icon name="chevronRight" className="chevron" />}
                 </button>
                 <div className="staff-actions">
-                  <button className="link" onClick={() => rename(b)}>
-                    Rename
+                  <button className="pill-btn" onClick={() => rename(b)}>
+                    <Icon name="edit" size={16} /> Rename
                   </button>
-                  <button className={`link ${b.active ? 'danger-text' : ''}`} onClick={() => toggleActive(b)}>
+                  <button className={`pill-btn ${b.active ? 'danger' : ''}`} onClick={() => toggleActive(b)}>
                     {b.active ? 'Deactivate' : 'Activate'}
                   </button>
                 </div>

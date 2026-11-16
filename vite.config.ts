@@ -18,8 +18,8 @@ export default defineConfig({
         name: 'GCash Tracker',
         short_name: 'GCash Tracker',
         description: 'Record GCash transactions by capturing or uploading receipts.',
-        theme_color: '#007DFE',
-        background_color: '#F3F6FB',
+        theme_color: '#0a6cff',
+        background_color: '#f2f5fa',
         display: 'standalone',
         orientation: 'portrait',
         start_url: '/',
@@ -37,7 +37,7 @@ export default defineConfig({
         importScripts: ['push-sw.js'],
         // Never answer API calls from the offline cache.
         navigateFallbackDenylist: [/^\/api\//],
-        globIgnores: ['**/icon.png'], // 1024px source icon, only used to generate the others
+        globIgnores: ['**/logo.svg'], // source for the generated icons
         // Cache the OCR engine and English language data after first use so scanning works offline.
         runtimeCaching: [
           {

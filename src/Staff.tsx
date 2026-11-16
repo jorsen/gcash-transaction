@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api, type StaffUser, type User } from './api';
 import { PasswordInput } from './PasswordInput';
+import { Avatar, Icon, useUi } from './ui';
 
 /**
  * Staff of one business.
@@ -18,7 +19,9 @@ export function Staff({
   businessName: string;
   onBack: () => void;
 }) {
+  const ui = useUi();
   const isSuper = me.role === 'superadmin';
+  const [formOpen, setFormOpen] = useState(false);
   const [users, setUsers] = useState<StaffUser[]>([]);
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
@@ -44,9 +47,13 @@ export function Staff({
     setBusy(true);
     try {
       await api.addUser({ name, username, password, role: isSuper ? role : 'tindera', businessId });
-      alert(
-        `${role === 'owner' && isSuper ? 'Owner' : 'Tindera'} account created.\n\nUsername: ${username.trim().toLowerCase()}\nPassword: ${password}\n\nGive these to ${name}.`,
-      );
+      await ui.info({
+        title: `${role === 'owner' && isSuper ? 'Owner' : 'Tindera'} account created`,
+        message: `Give these login details to ${name}:`,
+        copyText: `Username: ${username.trim().toLowerCase()}\nPassword: ${password}`,
+        confirmText: 'Done',
+      });
+      setFormOpen(false);
       setName('');
       setUsername('');
       setPassword('');
@@ -59,23 +66,43 @@ export function Staff({
   };
 
   const resetPassword = async (u: StaffUser) => {
-    const pw = prompt(`New password for ${u.name} (at least 6 characters):`);
-    if (!pw) return;
+    const v = await ui.ask({
+      title: `Reset ${u.name}'s password`,
+      message: u.id !== me.id ? 'They will be logged out on all their devices.' : undefined,
+      fields: [{ name: 'pw', label: 'New password (at least 6 characters)', type: 'password' }],
+      confirmText: 'Reset password',
+    });
+    if (!v) return;
     try {
-      await api.updateUser(u.id, { password: pw });
-      alert(`Password changed for ${u.name}.${u.id !== me.id ? ' They have been logged out on all devices.' : ''}`);
+      await api.updateUser(u.id, { password: v.pw });
+      await ui.info({
+        title: 'Password changed',
+        message: `New login details for ${u.name}:`,
+        copyText: `Username: ${u.username}\nPassword: ${v.pw}`,
+        confirmText: 'Done',
+      });
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      ui.toast(err instanceof Error ? err.message : String(err), 'error');
     }
   };
 
   const toggleActive = async (u: StaffUser) => {
-    if (u.active && !confirm(`Deactivate ${u.name}? They will be logged out and can't log in until activated again. Their transactions are kept.`)) return;
+    if (
+      u.active &&
+      !(await ui.confirm({
+        title: `Deactivate ${u.name}?`,
+        message: "They'll be logged out and can't log in until you activate them again. Their transactions are kept.",
+        confirmText: 'Deactivate',
+        danger: true,
+      }))
+    )
+      return;
     try {
       await api.updateUser(u.id, { active: !u.active });
+      ui.toast(u.active ? `${u.name} deactivated` : `${u.name} activated`, 'info');
       load();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      ui.toast(err instanceof Error ? err.message : String(err), 'error');
     }
   };
 
@@ -83,7 +110,7 @@ export function Staff({
     <div className="page">
       <header className="appbar">
         <button className="icon-btn" aria-label="Back" onClick={onBack}>
-          ←
+          <Icon name="back" />
         </button>
         <div className="appbar-title">
           <h1>Staff accounts</h1>
@@ -96,6 +123,8 @@ export function Staff({
         <ul className="list">
           {users.map((u) => (
             <li key={u.id} className={`staff-row ${u.active ? '' : 'inactive'}`}>
+              <div className="staff-head">
+              <Avatar name={u.name} />
               <div className="row-main">
                 <span className="row-title">
                   {u.name} {u.role === 'owner' && <span className="badge">Owner</span>}
@@ -105,13 +134,14 @@ export function Staff({
                   @{u.username} · {u.txnCount} transaction{u.txnCount === 1 ? '' : 's'}
                 </span>
               </div>
+              </div>
               {canManage(u) && (
                 <div className="staff-actions">
-                  <button className="link" onClick={() => resetPassword(u)}>
-                    Reset password
+                  <button className="pill-btn" onClick={() => resetPassword(u)}>
+                    <Icon name="key" size={16} /> Reset password
                   </button>
                   {u.id !== me.id && (
-                    <button className={`link ${u.active ? 'danger-text' : ''}`} onClick={() => toggleActive(u)}>
+                    <button className={`pill-btn ${u.active ? 'danger' : ''}`} onClick={() => toggleActive(u)}>
                       {u.active ? 'Deactivate' : 'Activate'}
                     </button>
                   )}
@@ -121,8 +151,19 @@ export function Staff({
           ))}
         </ul>
 
+        {!formOpen && (
+          <button className="btn primary block" onClick={() => setFormOpen(true)}>
+            <Icon name="plus" size={20} /> {isSuper ? 'Add staff' : 'Add tindera'}
+          </button>
+        )}
+        {formOpen && (
         <form className="card form" onSubmit={add}>
-          <h2>{isSuper ? 'Add staff' : 'Add tindera'}</h2>
+          <div className="card-head">
+            <h2>{isSuper ? 'Add staff' : 'Add tindera'}</h2>
+            <button type="button" className="icon-btn subtle" aria-label="Close" onClick={() => setFormOpen(false)}>
+              <Icon name="close" size={18} />
+            </button>
+          </div>
           {isSuper && (
             <div className="chips">
               <button type="button" className={`chip ${role === 'tindera' ? 'active' : ''}`} onClick={() => setRole('tindera')}>
@@ -159,6 +200,7 @@ export function Staff({
             {busy ? 'Please wait…' : `Create ${isSuper && role === 'owner' ? 'owner' : 'tindera'} account`}
           </button>
         </form>
+        )}
       </main>
     </div>
   );

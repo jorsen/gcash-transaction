@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api, type CashinRequest, type User } from './api';
 import { peso } from './format';
+import { Icon, SkeletonRows, useUi } from './ui';
 
 /** "09171234567" -> "0917 123 4567" */
 const prettyNumber = (n: string) => n.replace(/^(\d{4})(\d{3})(\d{4})$/, '$1 $2 $3');
@@ -88,16 +89,18 @@ export function CashIn({
   /** Changes whenever a cash-in request is added or handled (realtime). */
   liveStamp: string | null;
 }) {
+  const ui = useUi();
   const isManager = user.role !== 'tindera';
   const canCreate = user.role !== 'superadmin';
+  // Tinderas mainly create requests; owners mainly handle them, so their form starts collapsed.
+  const [formOpen, setFormOpen] = useState(!isManager);
+  const [view, setView] = useState<'waiting' | 'finished'>('waiting');
   const [items, setItems] = useState<CashinRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [showDone, setShowDone] = useState(false);
   const [form, setForm] = useState({ number: '', gcashName: '', amount: '', note: '' });
   const [formError, setFormError] = useState('');
   const [sending, setSending] = useState(false);
-  const [sentMsg, setSentMsg] = useState('');
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
@@ -158,11 +161,10 @@ export function CashIn({
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setFormError('');
-    setSentMsg('');
     setSending(true);
     try {
       await api.addCashin({ ...form, number: digits, businessId });
-      setSentMsg(`Sent to the owner: ${form.number} · ${form.gcashName.toUpperCase()}`);
+      ui.toast(`Sent to the owner: ${form.number}`);
       setForm({ number: '', gcashName: '', amount: '', note: '' });
       setAutoFilled(false);
       load();
@@ -176,20 +178,32 @@ export function CashIn({
   const copy = async (r: CashinRequest) => {
     if (await copyText(r.number)) {
       setCopiedId(r.id);
+      ui.toast(`${prettyNumber(r.number)} copied. Paste it in GCash.`);
       setTimeout(() => setCopiedId((c) => (c === r.id ? null : c)), 2500);
     } else {
-      alert(`Copy failed. The number is ${r.number}`);
+      ui.info({ title: 'Copy failed', message: `The number is ${prettyNumber(r.number)}` });
     }
   };
 
   const update = async (r: CashinRequest, status: 'done' | 'cancelled') => {
-    if (status === 'cancelled' && !confirm(`Cancel the cash-in to ${prettyNumber(r.number)}?`)) return;
+    if (
+      status === 'cancelled' &&
+      !(await ui.confirm({
+        title: 'Cancel this cash-in?',
+        message: `${prettyNumber(r.number)} · ${r.gcashName.toUpperCase()}${r.amount !== null ? ` · ${peso(r.amount)}` : ''}`,
+        confirmText: 'Cancel request',
+        cancelText: 'Keep',
+        danger: true,
+      }))
+    )
+      return;
     setBusyId(r.id);
     try {
       await api.updateCashin(r.id, status);
+      ui.toast(status === 'done' ? 'Marked as sent' : 'Request cancelled', status === 'done' ? 'success' : 'info');
       await load();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      ui.toast(err instanceof Error ? err.message : String(err), 'error');
     } finally {
       setBusyId(null);
     }
@@ -215,11 +229,12 @@ export function CashIn({
       {r.status === 'pending' && (
         <div className="cashin-actions">
           <button className={`btn primary copy-btn ${copiedId === r.id ? 'copied' : ''}`} onClick={() => copy(r)}>
-            {copiedId === r.id ? '✓ Copied' : '📋 Copy number'}
+            <Icon name={copiedId === r.id ? 'check' : 'copy'} size={18} />
+            {copiedId === r.id ? 'Copied' : 'Copy number'}
           </button>
           {isManager && (
             <button className="btn done-btn" onClick={() => update(r, 'done')} disabled={busyId === r.id}>
-              ✓ Done
+              <Icon name="check" size={18} /> Done
             </button>
           )}
           {(isManager || r.createdBy === user.id) && (
@@ -229,15 +244,26 @@ export function CashIn({
           )}
         </div>
       )}
-      {r.status !== 'pending' && <span className={`status-pill ${r.status}`}>{r.status === 'done' ? 'Sent ✓' : 'Cancelled'}</span>}
+      {r.status !== 'pending' && <span className={`status-pill ${r.status}`}>{r.status === 'done' ? 'Sent' : 'Cancelled'}</span>}
     </li>
   );
 
-  return (
-    <>
-      {canCreate && (
+  const formEl = canCreate && !formOpen && (
+    <button className="btn secondary block new-request-btn" onClick={() => setFormOpen(true)}>
+      <Icon name="plus" size={20} /> New cash-in request
+    </button>
+  );
+
+  const form_ = canCreate && formOpen && (
         <form className="card form" onSubmit={submit}>
-          <h2>New cash-in request</h2>
+          <div className="card-head">
+            <h2>New cash-in request</h2>
+            {isManager && (
+              <button type="button" className="icon-btn subtle" aria-label="Close" onClick={() => setFormOpen(false)}>
+                <Icon name="close" size={18} />
+              </button>
+            )}
+          </div>
           <label className="field">
             <span className="label">Customer's GCash number</span>
             <input
@@ -317,42 +343,58 @@ export function CashIn({
             <input className="input" value={form.note} onChange={(e) => set('note', e.target.value)} />
           </label>
           {formError && <div className="error">{formError}</div>}
-          {sentMsg && <div className="success">✓ {sentMsg}</div>}
           <button className="btn primary block" disabled={sending || !status?.ok}>
             {sending ? 'Sending…' : 'Send to owner'}
           </button>
         </form>
-      )}
+  );
 
-      {error ? (
-        <div className="notice column">
-          <span className="error">{error}</span>
-          <button className="btn secondary block" onClick={load}>
-            Try again
-          </button>
-        </div>
-      ) : loading ? (
-        <div className="center">
-          <span className="spinner big" />
+  const shown = view === 'waiting' ? pending : finished;
+  const listEl = error ? (
+    <div className="empty-state">
+      <p className="error">{error}</p>
+      <button className="btn secondary" onClick={load}>
+        Try again
+      </button>
+    </div>
+  ) : loading ? (
+    <SkeletonRows count={2} />
+  ) : (
+    <>
+      <div className="segmented" role="tablist">
+        <button role="tab" aria-selected={view === 'waiting'} className={view === 'waiting' ? 'active' : ''} onClick={() => setView('waiting')}>
+          Waiting{pending.length ? ` · ${pending.length}` : ''}
+        </button>
+        <button role="tab" aria-selected={view === 'finished'} className={view === 'finished' ? 'active' : ''} onClick={() => setView('finished')}>
+          Finished{finished.length ? ` · ${finished.length}` : ''}
+        </button>
+      </div>
+      {shown.length === 0 ? (
+        <div className="empty-state compact">
+          <span className="empty-icon">
+            <Icon name="cash" size={34} />
+          </span>
+          <strong>{view === 'waiting' ? 'No cash-in requests waiting' : 'Nothing finished yet'}</strong>
+          {view === 'waiting' && <p>{isManager ? 'New requests from tinderas appear here instantly.' : 'Requests you send appear here until the owner sends them.'}</p>}
         </div>
       ) : (
-        <>
-          <h3 className="section-title">Waiting{pending.length ? ` (${pending.length})` : ''}</h3>
-          {pending.length === 0 ? (
-            <p className="empty small">{isManager ? 'No cash-in requests waiting.' : 'Nothing waiting.'}</p>
-          ) : (
-            <ul className="list">{pending.map(card)}</ul>
-          )}
-          {finished.length > 0 && (
-            <>
-              <button className="link" onClick={() => setShowDone((s) => !s)}>
-                {showDone ? 'Hide' : 'Show'} finished ({finished.length})
-              </button>
-              {showDone && <ul className="list">{finished.map(card)}</ul>}
-            </>
-          )}
-        </>
+        <ul className="list">{shown.map(card)}</ul>
       )}
+    </>
+  );
+
+  // Tindera: form first. Owner: waiting requests first, form behind a button.
+  return isManager ? (
+    <>
+      {listEl}
+      {formEl}
+      {form_}
+    </>
+  ) : (
+    <>
+      {formEl}
+      {form_}
+      {listEl}
     </>
   );
 }

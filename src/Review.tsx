@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { api, blobToPayload, imageUrl, type TxnPayload, type User } from './api';
 import { BlobImage } from './BlobImage';
-import { prettyDate } from './format';
+import { peso, prettyDate } from './format';
+import { Icon, useUi } from './ui';
 import { compressForStorage } from './image';
 import { recognizeText } from './ocr';
 import { formatDateTime, parseGcashReceipt, TXN_TYPES, type TxnType } from './parseGcash';
@@ -44,6 +45,7 @@ export function Review({
   id?: number;
   onDone: () => void;
 }) {
+  const ui = useUi();
   const isOwner = user.role !== 'tindera'; // owner or super admin
   /** Newly picked image (not yet uploaded). */
   const [newImage, setNewImage] = useState<Blob | null>(file ?? null);
@@ -160,9 +162,10 @@ export function Review({
       if (businessId) payload.businessId = businessId;
       if (id !== undefined) await api.updateTransaction(id, payload);
       else await api.addTransaction(payload);
+      ui.toast(id !== undefined ? 'Changes saved' : `Saved ${peso(payload.amount)} ${payload.type}`);
       onDone();
     } catch (e) {
-      alert(`Could not save: ${e instanceof Error ? e.message : String(e)}`);
+      ui.toast(`Could not save: ${e instanceof Error ? e.message : String(e)}`, 'error');
       setSaving(false);
     }
   };
@@ -170,11 +173,12 @@ export function Review({
   const save = async () => {
     const amount = parseFloat(form.amount.replace(/,/g, ''));
     if (!Number.isFinite(amount) || amount <= 0) {
-      alert('Please enter a valid amount.');
+      ui.toast('Please enter a valid amount', 'error');
+      document.querySelector<HTMLInputElement>('input[inputmode="decimal"]')?.focus();
       return;
     }
     if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(form.txnDate.trim())) {
-      alert('Please enter the date and time.');
+      ui.toast('Please enter the date and time', 'error');
       return;
     }
     const ref = form.refNo.replace(/\s+/g, '');
@@ -183,9 +187,12 @@ export function Review({
         const { duplicate: d } = await api.checkRef(ref, id, businessId);
         if (
           d &&
-          !confirm(
-            `Ref ${d.refNo} was already saved by ${d.createdByName} on ${prettyDate(d.txnDate)} (${d.recipient || d.type}).\n\nSave anyway?`,
-          )
+          !(await ui.confirm({
+            title: 'Already recorded?',
+            message: `Ref ${d.refNo} was saved by ${d.createdByName} on ${prettyDate(d.txnDate)} (${d.recipient || d.type}).`,
+            confirmText: 'Save anyway',
+            cancelText: 'Go back',
+          }))
         ) {
           return;
         }
@@ -197,12 +204,17 @@ export function Review({
   };
 
   const remove = async () => {
-    if (id === undefined || !confirm('Delete this transaction and its receipt image?')) return;
+    if (
+      id === undefined ||
+      !(await ui.confirm({ title: 'Delete this transaction?', message: 'Its receipt image is deleted too. This cannot be undone.', confirmText: 'Delete', danger: true }))
+    )
+      return;
     try {
       await api.deleteTransaction(id);
+      ui.toast('Transaction deleted', 'info');
       onDone();
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      ui.toast(e instanceof Error ? e.message : String(e), 'error');
     }
   };
 
@@ -214,13 +226,22 @@ export function Review({
   );
 
   return (
-    <div className="page">
+    <div className="page has-sticky-actions">
       <header className="appbar">
         <button className="icon-btn" aria-label="Back" onClick={onDone}>
-          ←
+          <Icon name="back" />
         </button>
-        <h1>{id !== undefined ? 'Transaction' : 'New Transaction'}</h1>
-        <span className="icon-btn" />
+        <div className="appbar-title">
+          <h1>{id !== undefined ? 'Transaction' : 'New receipt'}</h1>
+          {isOwner && createdByName && <small>Recorded by {createdByName}</small>}
+        </div>
+        {id !== undefined && isOwner ? (
+          <button className="icon-btn" aria-label="Delete transaction" onClick={remove}>
+            <Icon name="trash" />
+          </button>
+        ) : (
+          <span className="icon-btn" />
+        )}
       </header>
 
       <main className="content">
@@ -239,15 +260,15 @@ export function Review({
             )}
 
             <div className="image-actions">
-              <button className="link" onClick={() => cameraRef.current?.click()}>
-                Retake
+              <button className="pill-btn" onClick={() => cameraRef.current?.click()}>
+                <Icon name="camera" size={18} /> Retake
               </button>
-              <button className="link" onClick={() => galleryRef.current?.click()}>
-                Choose another
+              <button className="pill-btn" onClick={() => galleryRef.current?.click()}>
+                <Icon name="image" size={18} /> Choose another
               </button>
               {newImage && (
-                <button className="link" onClick={() => scan(newImage)} disabled={scanning}>
-                  Re-scan
+                <button className="pill-btn" onClick={() => scan(newImage)} disabled={scanning}>
+                  <Icon name="search" size={18} /> Re-scan
                 </button>
               )}
             </div>
@@ -261,10 +282,9 @@ export function Review({
             ) : (
               notice && <div className="notice">{notice}</div>
             )}
-            {isOwner && createdByName && <div className="muted">Recorded by {createdByName}</div>}
 
-            <label className="label">Type</label>
-            <div className="chips">
+            <span className="label">Type</span>
+            <div className="chips scroll">
               {TXN_TYPES.map((t) => (
                 <button key={t} className={`chip ${form.type === t ? 'active' : ''}`} onClick={() => set('type', t)}>
                   {t}
@@ -273,7 +293,7 @@ export function Review({
             </div>
 
             <Field label="Amount (₱)">
-              <input className="input" inputMode="decimal" placeholder="0.00" value={form.amount} onChange={(e) => set('amount', e.target.value)} />
+              <input className="input amount-input" inputMode="decimal" placeholder="0.00" value={form.amount} onChange={(e) => set('amount', e.target.value)} />
             </Field>
             <Field label="Reference No.">
               <input className="input" inputMode="numeric" placeholder="13-digit ref no." value={form.refNo} onChange={(e) => set('refNo', e.target.value)} />
@@ -291,15 +311,6 @@ export function Review({
               <textarea className="input" rows={3} placeholder="What was this for?" value={form.note} onChange={(e) => set('note', e.target.value)} />
             </Field>
 
-            <button className="btn primary block" onClick={save} disabled={saving}>
-              {saving ? 'Saving…' : id !== undefined ? 'Save Changes' : 'Save Transaction'}
-            </button>
-            {id !== undefined && isOwner && (
-              <button className="btn danger block" onClick={remove}>
-                Delete
-              </button>
-            )}
-
             {rawText && (
               <button className="link" onClick={() => setShowRaw((s) => !s)}>
                 {showRaw ? 'Hide' : 'Show'} scanned text
@@ -309,6 +320,17 @@ export function Review({
           </>
         )}
       </main>
+
+      {!loading && (
+        <div className="sticky-actions">
+          <button className="btn secondary" onClick={onDone} disabled={saving}>
+            Cancel
+          </button>
+          <button className="btn primary" onClick={save} disabled={saving}>
+            {saving ? 'Saving…' : id !== undefined ? 'Save changes' : 'Save receipt'}
+          </button>
+        </div>
+      )}
 
       {zoom && hasImage && (
         <div className="zoom" onClick={() => setZoom(false)}>
