@@ -554,6 +554,27 @@ async function route(req: Request): Promise<Response> {
     return json({ ok: true });
   }
 
+  // ---------- realtime ----------
+  // A tiny "version stamp" of what this user can see. The app polls it every few seconds while
+  // visible (and immediately when a push arrives) and reloads only when it changes.
+  if (path === 'changes' && m === 'GET') {
+    const me = requireUser(user);
+    const businessId = businessScope(me, url.searchParams.get('businessId'));
+    const own = me.role === 'tindera';
+    const [r] = await query<{ t: string | null; tc: number; c: string | null; cc: number; pending: number }>(
+      `SELECT (SELECT MAX(updated_at)::text FROM transactions WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS t,
+              (SELECT COUNT(*)::int FROM transactions WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS tc,
+              (SELECT MAX(GREATEST(created_at, COALESCE(handled_at, created_at)))::text FROM cashin_requests
+                WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS c,
+              (SELECT COUNT(*)::int FROM cashin_requests WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS cc,
+              (SELECT COUNT(*)::int FROM cashin_requests
+                WHERE business_id = $1 AND status = 'pending' AND ($2::int IS NULL OR created_by = $2)) AS pending`,
+      [businessId, own ? me.id : null],
+    );
+    // Counts are included so deletions are noticed too.
+    return json({ receipts: `${r.t ?? ''}|${r.tc}`, cashin: `${r.c ?? ''}|${r.cc}`, pending: r.pending });
+  }
+
   if (path === 'check-ref' && m === 'GET') {
     const me = requireUser(user);
     const businessId = businessScope(me, url.searchParams.get('businessId'));

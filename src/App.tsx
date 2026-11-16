@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'reac
 import { api, imageUrl, setUnauthorizedHandler, type StaffUser, type Summary, type Txn, type User } from './api';
 import { Businesses } from './Businesses';
 import { CashIn } from './CashIn';
+import { useLiveStamp } from './live';
 import { disablePush, enablePush, getPushState, syncPushSubscription, unlinkPushSubscription, type PushState } from './push';
 import { exportCsv, uploadLocalRecords } from './backup';
 import { countLocal } from './db';
@@ -214,18 +215,17 @@ function Home({
     if (!isSuper) getPushState().then(setPushState).catch(() => setPushState('unsupported'));
   }, [isSuper]);
 
-  // Badge count of waiting cash-in requests (refreshes every 30 s while the app is visible).
+  // Realtime: badge count, and reload the receipts list when someone adds/edits/deletes one.
+  const live = useLiveStamp(scopeId);
+  const lastReceipts = useRef<string | null>(null);
   useEffect(() => {
-    const refresh = () =>
-      document.visibilityState === 'visible' &&
-      api
-        .cashin({ businessId: scopeId, pendingOnly: true })
-        .then((r) => setPendingCashin(r.pending))
-        .catch(() => undefined);
-    refresh();
-    const t = setInterval(refresh, 30000);
-    return () => clearInterval(t);
-  }, [scopeId]);
+    if (!live) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing from the live stamp
+    setPendingCashin(live.pending);
+    if (lastReceipts.current !== null && lastReceipts.current !== live.receipts) load(true);
+    lastReceipts.current = live.receipts;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live]);
 
   const togglePush = async () => {
     setPushBusy(true);
@@ -238,8 +238,9 @@ function Home({
     }
   };
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  /** silent: refresh in the background without the loading spinner (realtime updates). */
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError('');
     try {
       const r = await api.transactions({ month, search: search.trim(), userId: staffFilter, businessId: scopeId });
@@ -254,7 +255,7 @@ function Home({
 
   // Debounce so typing in the search box doesn't fire a request per keystroke.
   useEffect(() => {
-    const t = setTimeout(load, search ? 350 : 0);
+    const t = setTimeout(() => load(), search ? 350 : 0);
     return () => clearTimeout(t);
   }, [load, search]);
 
@@ -399,7 +400,7 @@ function Home({
         </div>
 
         {tab === 'cashin' ? (
-          <CashIn user={user} businessId={scopeId} onPendingChange={setPendingCashin} />
+          <CashIn user={user} businessId={scopeId} onPendingChange={setPendingCashin} liveStamp={live?.cashin ?? null} />
         ) : (
         <>
         <section className="summary">
@@ -467,7 +468,7 @@ function Home({
         {error ? (
           <div className="notice column">
             <span className="error">{error}</span>
-            <button className="btn secondary block" onClick={load}>
+            <button className="btn secondary block" onClick={() => load()}>
               Try again
             </button>
           </div>

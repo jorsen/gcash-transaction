@@ -58,11 +58,14 @@ export function CashIn({
   user,
   businessId,
   onPendingChange,
+  liveStamp,
 }: {
   user: User;
   /** Super admin: the business being viewed; null otherwise. */
   businessId: number | null;
   onPendingChange: (n: number) => void;
+  /** Changes whenever a cash-in request is added or handled (realtime). */
+  liveStamp: string | null;
 }) {
   const isManager = user.role !== 'tindera';
   const canCreate = user.role !== 'superadmin';
@@ -90,18 +93,11 @@ export function CashIn({
     }
   }, [businessId, onPendingChange]);
 
-  // Refresh now, every 20 s while visible, and whenever the app comes back to the foreground.
+  // Load now, and again whenever the realtime stamp says something changed.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load() only sets state after awaiting the API
     load();
-    const t = setInterval(() => document.visibilityState === 'visible' && load(), 20000);
-    const onVis = () => document.visibilityState === 'visible' && load();
-    document.addEventListener('visibilitychange', onVis);
-    return () => {
-      clearInterval(t);
-      document.removeEventListener('visibilitychange', onVis);
-    };
-  }, [load]);
+  }, [load, liveStamp]);
 
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
 

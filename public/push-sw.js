@@ -8,14 +8,20 @@ self.addEventListener('push', (event) => {
     data = { title: 'GCash Tracker', body: event.data ? event.data.text() : '' };
   }
   event.waitUntil(
-    self.registration.showNotification(data.title || 'GCash Tracker', {
-      body: data.body || '',
-      icon: '/pwa-192x192.png',
-      badge: '/pwa-64x64.png',
-      tag: data.tag,
-      renotify: Boolean(data.tag),
-      data: { url: data.url || '/' },
-    }),
+    Promise.all([
+      // Tell any open app window to refresh its lists right away (realtime).
+      self.clients
+        .matchAll({ type: 'window', includeUncontrolled: true })
+        .then((list) => list.forEach((c) => c.postMessage({ type: 'push-received', tag: data.tag }))),
+      self.registration.showNotification(data.title || 'GCash Tracker', {
+        body: data.body || '',
+        icon: '/pwa-192x192.png',
+        badge: '/pwa-64x64.png',
+        tag: data.tag,
+        renotify: Boolean(data.tag),
+        data: { url: data.url || '/' },
+      }),
+    ]),
   );
 });
 
