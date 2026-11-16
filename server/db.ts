@@ -12,7 +12,8 @@ let neonQuery: QueryFn | null = null;
 function getQuery(): QueryFn {
   if (globalThis.__gcashQuery) return globalThis.__gcashQuery;
   if (!neonQuery) {
-    const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
+    // DATABASE_URL is the default name; STORAGE_URL is what Vercel's Neon integration uses with its default prefix.
+    const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL ?? process.env.STORAGE_URL;
     if (!url) throw new Error('DATABASE_URL is not set. Connect a Postgres database (Neon) to the Vercel project.');
     const sql = neon(url);
     neonQuery = (text, params = []) => sql.query(text, params) as never;
