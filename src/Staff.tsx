@@ -1,0 +1,128 @@
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { api, type StaffUser } from './api';
+
+/** Owner-only: add tindera accounts, reset passwords, activate/deactivate. */
+export function Staff({ onBack }: { onBack: () => void }) {
+  const [users, setUsers] = useState<StaffUser[]>([]);
+  const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    api
+      .users()
+      .then((r) => setUsers(r.users))
+      .catch((e) => setError(e.message));
+  }, []);
+  useEffect(load, [load]);
+
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      await api.addUser({ name, username, password });
+      alert(`Account created.\n\nUsername: ${username.trim().toLowerCase()}\nPassword: ${password}\n\nGive these to ${name}.`);
+      setName('');
+      setUsername('');
+      setPassword('');
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetPassword = async (u: StaffUser) => {
+    const pw = prompt(`New password for ${u.name} (at least 6 characters):`);
+    if (!pw) return;
+    try {
+      await api.updateUser(u.id, { password: pw });
+      alert(`Password changed for ${u.name}.${u.role === 'tindera' ? ' She has been logged out on all devices.' : ''}`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const toggleActive = async (u: StaffUser) => {
+    if (u.active && !confirm(`Deactivate ${u.name}? She will be logged out and can't log in until you activate her again. Her transactions are kept.`)) return;
+    try {
+      await api.updateUser(u.id, { active: !u.active });
+      load();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <div className="page">
+      <header className="appbar">
+        <button className="icon-btn" aria-label="Back" onClick={onBack}>
+          ←
+        </button>
+        <h1>Staff accounts</h1>
+        <span className="icon-btn" />
+      </header>
+
+      <main className="content">
+        <ul className="list">
+          {users.map((u) => (
+            <li key={u.id} className={`staff-row ${u.active ? '' : 'inactive'}`}>
+              <div className="row-main">
+                <span className="row-title">
+                  {u.name} {u.role === 'owner' && <span className="badge">Owner</span>}
+                  {!u.active && <span className="badge muted-badge">Deactivated</span>}
+                </span>
+                <span className="row-sub">
+                  @{u.username} · {u.txnCount} transaction{u.txnCount === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div className="staff-actions">
+                <button className="link" onClick={() => resetPassword(u)}>
+                  Reset password
+                </button>
+                {u.role === 'tindera' && (
+                  <button className={`link ${u.active ? 'danger-text' : ''}`} onClick={() => toggleActive(u)}>
+                    {u.active ? 'Deactivate' : 'Activate'}
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+
+        <form className="card form" onSubmit={add}>
+          <h2>Add tindera</h2>
+          <label className="field">
+            <span className="label">Name</span>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Maria" required />
+          </label>
+          <label className="field">
+            <span className="label">Username</span>
+            <input
+              className="input"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="e.g. maria"
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoComplete="off"
+              required
+            />
+          </label>
+          <label className="field">
+            <span className="label">Password (at least 6 characters)</span>
+            <input className="input" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" required />
+          </label>
+          {error && <div className="error">{error}</div>}
+          <button className="btn primary block" disabled={busy}>
+            {busy ? 'Please wait…' : 'Create account'}
+          </button>
+        </form>
+      </main>
+    </div>
+  );
+}

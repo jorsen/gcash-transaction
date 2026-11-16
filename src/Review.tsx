@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
-import { prettyDate } from './format';
-import { formatDateTime, parseGcashReceipt, TXN_TYPES, type TxnType } from './parseGcash';
+import { api, blobToPayload, imageUrl, type TxnPayload, type User } from './api';
 import { BlobImage } from './BlobImage';
-import { addTxn, deleteTxn, findByRefNo, getTxn, updateTxn, type TxnInput } from './db';
+import { prettyDate } from './format';
 import { compressForStorage } from './image';
 import { recognizeText } from './ocr';
+import { formatDateTime, parseGcashReceipt, TXN_TYPES, type TxnType } from './parseGcash';
 
 type Form = {
   type: TxnType;
@@ -30,11 +30,16 @@ const emptyForm = (): Form => ({
   note: '',
 });
 
-export function Review({ file, id, onDone }: { file?: File; id?: number; onDone: () => void }) {
-  const [image, setImage] = useState<Blob | null>(file ?? null);
-  const [imageChanged, setImageChanged] = useState(Boolean(file));
+export function Review({ user, file, id, onDone }: { user: User; file?: File; id?: number; onDone: () => void }) {
+  const isOwner = user.role === 'owner';
+  /** Newly picked image (not yet uploaded). */
+  const [newImage, setNewImage] = useState<Blob | null>(file ?? null);
+  /** URL of the image already stored in the cloud (when editing). */
+  const [savedImageUrl, setSavedImageUrl] = useState<string | null>(null);
+  const [createdByName, setCreatedByName] = useState('');
   const [rawText, setRawText] = useState('');
   const [form, setForm] = useState<Form>(emptyForm);
+  const [loading, setLoading] = useState(id !== undefined);
   const [scanning, setScanning] = useState(Boolean(file));
   const [progress, setProgress] = useState('');
   const [notice, setNotice] = useState('');
@@ -70,7 +75,7 @@ export function Review({ file, id, onDone }: { file?: File; id?: number; onDone:
     } catch (e) {
       setNotice(
         `Could not read the receipt (${e instanceof Error ? e.message : String(e)}). ` +
-          'The first scan needs internet to download the text reader. You can still enter the details manually.',
+          'You can still enter the details manually and save.',
       );
     } finally {
       setScanning(false);
@@ -89,20 +94,24 @@ export function Review({ file, id, onDone }: { file?: File; id?: number; onDone:
       // eslint-disable-next-line react-hooks/set-state-in-effect -- runScan only sets state after awaiting OCR
       runScan(file);
     } else if (id !== undefined) {
-      getTxn(id).then((t) => {
-        if (!t) return;
-        setImage(t.image);
-        setRawText(t.rawText);
-        setForm({
-          type: t.type,
-          amount: t.amount.toFixed(2),
-          refNo: t.refNo,
-          txnDate: t.txnDate,
-          recipient: t.recipient,
-          phone: t.phone,
-          note: t.note,
-        });
-      });
+      api
+        .transaction(id)
+        .then(({ txn: t }) => {
+          setSavedImageUrl(t.hasImage ? imageUrl(t) : null);
+          setRawText(t.rawText ?? '');
+          setCreatedByName(t.createdByName);
+          setForm({
+            type: t.type,
+            amount: t.amount.toFixed(2),
+            refNo: t.refNo,
+            txnDate: t.txnDate,
+            recipient: t.recipient,
+            phone: t.phone,
+            note: t.note,
+          });
+        })
+        .catch((e) => setNotice(e instanceof Error ? e.message : String(e)))
+        .finally(() => setLoading(false));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -111,15 +120,14 @@ export function Review({ file, id, onDone }: { file?: File; id?: number; onDone:
     const f = e.target.files?.[0];
     e.target.value = '';
     if (!f) return;
-    setImage(f);
-    setImageChanged(true);
+    setNewImage(f);
     scan(f);
   };
 
   const doSave = async () => {
     setSaving(true);
     try {
-      const data: TxnInput = {
+      const payload: TxnPayload = {
         type: form.type,
         amount: parseFloat(form.amount.replace(/,/g, '')),
         refNo: form.refNo.replace(/\s+/g, ''),
@@ -127,12 +135,17 @@ export function Review({ file, id, onDone }: { file?: File; id?: number; onDone:
         phone: form.phone.trim(),
         txnDate: form.txnDate.trim(),
         note: form.note.trim(),
-        // If compression fails for any reason, keep the original image rather than failing the save.
-        image: image && imageChanged ? await compressForStorage(image).catch(() => image) : image,
         rawText,
       };
-      if (id !== undefined) await updateTxn(id, data);
-      else await addTxn(data);
+      if (newImage) {
+        // Shrink to ~150 KB before uploading; if that fails, upload the original.
+        const small = await compressForStorage(newImage).catch(() => newImage);
+        payload.image = await blobToPayload(small);
+      } else if (id === undefined) {
+        payload.image = null;
+      }
+      if (id !== undefined) await api.updateTransaction(id, payload);
+      else await api.addTransaction(payload);
       onDone();
     } catch (e) {
       alert(`Could not save: ${e instanceof Error ? e.message : String(e)}`);
@@ -150,23 +163,41 @@ export function Review({ file, id, onDone }: { file?: File; id?: number; onDone:
       alert('Please enter the date and time.');
       return;
     }
-    const dup = await findByRefNo(form.refNo.replace(/\s+/g, ''), id);
-    if (
-      dup &&
-      !confirm(
-        `Ref ${dup.refNo} was already saved on ${prettyDate(dup.txnDate)} (${dup.recipient || dup.type}).\n\nSave anyway?`,
-      )
-    ) {
-      return;
+    const ref = form.refNo.replace(/\s+/g, '');
+    if (ref) {
+      try {
+        const { duplicate: d } = await api.checkRef(ref, id);
+        if (
+          d &&
+          !confirm(
+            `Ref ${d.refNo} was already saved by ${d.createdByName} on ${prettyDate(d.txnDate)} (${d.recipient || d.type}).\n\nSave anyway?`,
+          )
+        ) {
+          return;
+        }
+      } catch {
+        // If the check fails (e.g. offline), let the save itself report the problem.
+      }
     }
     doSave();
   };
 
   const remove = async () => {
     if (id === undefined || !confirm('Delete this transaction and its receipt image?')) return;
-    await deleteTxn(id);
-    onDone();
+    try {
+      await api.deleteTransaction(id);
+      onDone();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    }
   };
+
+  const hasImage = Boolean(newImage || savedImageUrl);
+  const imageEl = newImage ? (
+    <BlobImage blob={newImage} alt="Receipt" />
+  ) : (
+    <img src={savedImageUrl ?? ''} alt="Receipt" />
+  );
 
   return (
     <div className="page">
@@ -179,82 +210,95 @@ export function Review({ file, id, onDone }: { file?: File; id?: number; onDone:
       </header>
 
       <main className="content">
-        {image ? (
-          <button className="receipt" onClick={() => setZoom(true)} aria-label="View full receipt">
-            <BlobImage blob={image} alt="Receipt" />
-          </button>
-        ) : (
-          <div className="receipt receipt-empty">No receipt image</div>
-        )}
-
-        <div className="image-actions">
-          <button className="link" onClick={() => cameraRef.current?.click()}>Retake</button>
-          <button className="link" onClick={() => galleryRef.current?.click()}>Choose another</button>
-          {image && (
-            <button className="link" onClick={() => scan(image)} disabled={scanning}>
-              Re-scan
-            </button>
-          )}
-        </div>
-        <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onPick} />
-        <input ref={galleryRef} type="file" accept="image/*" hidden onChange={onPick} />
-
-        {scanning ? (
-          <div className="notice">
-            <span className="spinner" /> {progress || 'Reading receipt…'}
+        {loading ? (
+          <div className="center">
+            <span className="spinner big" />
           </div>
         ) : (
-          notice && <div className="notice">{notice}</div>
-        )}
+          <>
+            {hasImage ? (
+              <button className="receipt" onClick={() => setZoom(true)} aria-label="View full receipt">
+                {imageEl}
+              </button>
+            ) : (
+              <div className="receipt receipt-empty">No receipt image</div>
+            )}
 
-        <label className="label">Type</label>
-        <div className="chips">
-          {TXN_TYPES.map((t) => (
-            <button key={t} className={`chip ${form.type === t ? 'active' : ''}`} onClick={() => set('type', t)}>
-              {t}
+            <div className="image-actions">
+              <button className="link" onClick={() => cameraRef.current?.click()}>
+                Retake
+              </button>
+              <button className="link" onClick={() => galleryRef.current?.click()}>
+                Choose another
+              </button>
+              {newImage && (
+                <button className="link" onClick={() => scan(newImage)} disabled={scanning}>
+                  Re-scan
+                </button>
+              )}
+            </div>
+            <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onPick} />
+            <input ref={galleryRef} type="file" accept="image/*" hidden onChange={onPick} />
+
+            {scanning ? (
+              <div className="notice">
+                <span className="spinner" /> {progress || 'Reading receipt…'}
+              </div>
+            ) : (
+              notice && <div className="notice">{notice}</div>
+            )}
+            {isOwner && createdByName && <div className="muted">Recorded by {createdByName}</div>}
+
+            <label className="label">Type</label>
+            <div className="chips">
+              {TXN_TYPES.map((t) => (
+                <button key={t} className={`chip ${form.type === t ? 'active' : ''}`} onClick={() => set('type', t)}>
+                  {t}
+                </button>
+              ))}
+            </div>
+
+            <Field label="Amount (₱)">
+              <input className="input" inputMode="decimal" placeholder="0.00" value={form.amount} onChange={(e) => set('amount', e.target.value)} />
+            </Field>
+            <Field label="Reference No.">
+              <input className="input" inputMode="numeric" placeholder="13-digit ref no." value={form.refNo} onChange={(e) => set('refNo', e.target.value)} />
+            </Field>
+            <Field label="Date & time">
+              <input className="input" type="datetime-local" value={toInput(form.txnDate)} onChange={(e) => set('txnDate', fromInput(e.target.value))} />
+            </Field>
+            <Field label="Name / Merchant">
+              <input className="input" placeholder="e.g. JU** DE* C." value={form.recipient} onChange={(e) => set('recipient', e.target.value)} />
+            </Field>
+            <Field label="Mobile number">
+              <input className="input" type="tel" placeholder="+63 9XX XXX XXXX" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
+            </Field>
+            <Field label="Note">
+              <textarea className="input" rows={3} placeholder="What was this for?" value={form.note} onChange={(e) => set('note', e.target.value)} />
+            </Field>
+
+            <button className="btn primary block" onClick={save} disabled={saving}>
+              {saving ? 'Saving…' : id !== undefined ? 'Save Changes' : 'Save Transaction'}
             </button>
-          ))}
-        </div>
+            {id !== undefined && isOwner && (
+              <button className="btn danger block" onClick={remove}>
+                Delete
+              </button>
+            )}
 
-        <Field label="Amount (₱)">
-          <input className="input" inputMode="decimal" placeholder="0.00" value={form.amount} onChange={(e) => set('amount', e.target.value)} />
-        </Field>
-        <Field label="Reference No.">
-          <input className="input" inputMode="numeric" placeholder="13-digit ref no." value={form.refNo} onChange={(e) => set('refNo', e.target.value)} />
-        </Field>
-        <Field label="Date & time">
-          <input className="input" type="datetime-local" value={toInput(form.txnDate)} onChange={(e) => set('txnDate', fromInput(e.target.value))} />
-        </Field>
-        <Field label="Name / Merchant">
-          <input className="input" placeholder="e.g. JU** DE* C." value={form.recipient} onChange={(e) => set('recipient', e.target.value)} />
-        </Field>
-        <Field label="Mobile number">
-          <input className="input" type="tel" placeholder="+63 9XX XXX XXXX" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
-        </Field>
-        <Field label="Note">
-          <textarea className="input" rows={3} placeholder="What was this for?" value={form.note} onChange={(e) => set('note', e.target.value)} />
-        </Field>
-
-        <button className="btn primary block" onClick={save} disabled={saving}>
-          {saving ? 'Saving…' : id !== undefined ? 'Save Changes' : 'Save Transaction'}
-        </button>
-        {id !== undefined && (
-          <button className="btn danger block" onClick={remove}>
-            Delete
-          </button>
+            {rawText && (
+              <button className="link" onClick={() => setShowRaw((s) => !s)}>
+                {showRaw ? 'Hide' : 'Show'} scanned text
+              </button>
+            )}
+            {showRaw && <pre className="raw">{rawText}</pre>}
+          </>
         )}
-
-        {rawText && (
-          <button className="link" onClick={() => setShowRaw((s) => !s)}>
-            {showRaw ? 'Hide' : 'Show'} scanned text
-          </button>
-        )}
-        {showRaw && <pre className="raw">{rawText}</pre>}
       </main>
 
-      {zoom && image && (
+      {zoom && hasImage && (
         <div className="zoom" onClick={() => setZoom(false)}>
-          <BlobImage blob={image} alt="Receipt" />
+          {imageEl}
         </div>
       )}
     </div>

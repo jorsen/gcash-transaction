@@ -18,3 +18,7 @@ npm-debug.*
 
 # Tesseract language data cached by local OCR tests
 *.traineddata
+
+# local embedded Postgres used by `npm run dev`
+.pglite/
+.vercel/

@@ -132,3 +132,44 @@ textarea.input { resize: vertical; }
   display: grid; place-items: center; padding: 16px; overflow: auto;
 }
 .zoom img { max-width: 100%; height: auto; }
+
+/* ---------- accounts / cloud ---------- */
+.center { display: grid; place-items: center; min-height: 40vh; }
+.page.center { min-height: 100dvh; padding: 16px; }
+.muted { color: var(--muted); font-size: 13px; }
+.error { color: var(--red); font-size: 14px; }
+.spinner.big { width: 32px; height: 32px; border-width: 3px; }
+
+.login-page { display: grid; place-items: center; padding: 24px 16px; }
+.login-card {
+  width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 12px;
+  background: var(--card); border-radius: 18px; padding: 24px 20px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+}
+.login-card h1 { margin: 0; font-size: 22px; text-align: center; }
+.login-card p { margin: 0; text-align: center; }
+.login-logo { width: 72px; height: 72px; border-radius: 18px; align-self: center; }
+
+.appbar-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.appbar-title small { color: #cfe3ff; font-size: 12px; }
+.menu-backdrop { position: fixed; inset: 0; z-index: -1; }
+.menu { z-index: 20; }
+
+.notice.column { flex-direction: column; align-items: stretch; }
+
+.month-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #cfe3ff; font-size: 13px; }
+.month-nav button { color: #fff; font-size: 22px; width: 32px; height: 28px; border-radius: 8px; }
+.month-nav button:not(:disabled):active { background: rgba(255, 255, 255, 0.2); }
+.month-nav button:disabled { opacity: 0.3; }
+
+.chips.scroll { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+.chips.scroll .chip { flex: none; }
+
+.staff-row { display: flex; flex-direction: column; gap: 8px; background: var(--card); border-radius: 12px; padding: 12px; }
+.staff-row.inactive { opacity: 0.6; }
+.staff-actions { display: flex; gap: 20px; }
+.badge { display: inline-block; font-size: 11px; font-weight: 700; color: #fff; background: var(--blue); border-radius: 8px; padding: 1px 7px; margin-left: 4px; vertical-align: middle; }
+.muted-badge { background: var(--muted); }
+.danger-text { color: var(--red); }
+.card { background: var(--card); border-radius: 14px; padding: 16px; }
+.card.form { display: flex; flex-direction: column; gap: 12px; }
+.card h2 { margin: 0; font-size: 17px; }

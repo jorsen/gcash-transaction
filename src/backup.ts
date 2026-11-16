@@ -1,4 +1,5 @@
-import { addTxn, listTxns, type Txn } from './db';
+import { api, blobToPayload, type Txn } from './api';
+import { deleteLocal, listLocal } from './db';
 
 function download(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -11,71 +12,48 @@ function download(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
-
 const csvCell = (v: string | number) => {
   const s = String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-/** Spreadsheet-friendly export (opens in Excel / Google Sheets). Images are not included. */
-export async function exportCsv() {
-  const rows = (await listTxns()).reverse(); // oldest first
-  const header = ['Date', 'Type', 'Amount', 'Reference No.', 'Name / Merchant', 'Mobile', 'Note'];
+/** Spreadsheet-friendly export (opens in Excel / Google Sheets) of the given transactions. */
+export function exportCsv(items: Txn[], label: string) {
+  const header = ['Date', 'Type', 'Amount', 'Reference No.', 'Name / Merchant', 'Mobile', 'Note', 'Recorded by'];
+  const rows = [...items].sort((a, b) => a.txnDate.localeCompare(b.txnDate));
   const lines = [
     header.join(','),
     ...rows.map((t) =>
-      [t.txnDate, t.type, t.amount.toFixed(2), `'${t.refNo}`, t.recipient, t.phone, t.note]
+      [t.txnDate, t.type, t.amount.toFixed(2), `'${t.refNo}`, t.recipient, t.phone, t.note, t.createdByName]
         .map(csvCell)
         .join(','),
     ),
   ];
   // BOM so Excel reads the ₱ sign and names correctly.
-  download(new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv' }), `gcash-transactions-${today()}.csv`);
+  download(new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv' }), `gcash-transactions-${label}.csv`);
 }
 
-const blobToDataUrl = (b: Blob) =>
-  new Promise<string>((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result as string);
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(b);
-  });
-
-type BackupRow = Omit<Txn, 'id' | 'image'> & { image: string | null };
-
-/** Full backup including receipt images, to restore on this or another phone. */
-export async function exportBackup() {
-  const rows = await listTxns();
-  const out: BackupRow[] = [];
-  for (const { id: _id, image, ...rest } of rows) {
-    out.push({ ...rest, image: image ? await blobToDataUrl(image) : null });
+/**
+ * Uploads records saved on this device by the old offline version to the cloud,
+ * removing each one locally once it is safely stored.
+ */
+export async function uploadLocalRecords(onProgress: (done: number, total: number) => void) {
+  const rows = await listLocal();
+  let done = 0;
+  for (const r of rows) {
+    await api.addTransaction({
+      type: r.type,
+      amount: r.amount,
+      refNo: r.refNo,
+      recipient: r.recipient,
+      phone: r.phone,
+      txnDate: r.txnDate,
+      note: r.note,
+      rawText: r.rawText,
+      image: r.image ? await blobToPayload(r.image) : null,
+    });
+    await deleteLocal(r.id);
+    onProgress(++done, rows.length);
   }
-  const json = JSON.stringify({ app: 'gcash-tracker', version: 1, exportedAt: new Date().toISOString(), txns: out });
-  download(new Blob([json], { type: 'application/json' }), `gcash-backup-${today()}.json`);
-}
-
-/** Restores a backup. Records already present (same ref no., date and amount) are skipped. */
-export async function importBackup(file: File): Promise<{ added: number; skipped: number }> {
-  const data = JSON.parse(await file.text());
-  if (data?.app !== 'gcash-tracker' || !Array.isArray(data.txns)) {
-    throw new Error('This is not a GCash Tracker backup file.');
-  }
-  const existing = await listTxns();
-  const key = (t: { refNo: string; txnDate: string; amount: number }) => `${t.refNo}|${t.txnDate}|${t.amount}`;
-  const seen = new Set(existing.map(key));
-  let added = 0;
-  let skipped = 0;
-  for (const row of data.txns as BackupRow[]) {
-    if (seen.has(key(row))) {
-      skipped++;
-      continue;
-    }
-    const { createdAt, ...rest } = row;
-    const image = row.image ? await (await fetch(row.image)).blob() : null;
-    await addTxn({ ...rest, image }, createdAt);
-    seen.add(key(row));
-    added++;
-  }
-  return { added, skipped };
+  return done;
 }

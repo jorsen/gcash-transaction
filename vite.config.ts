@@ -1,15 +1,16 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { apiDevPlugin } from './dev/apiDevPlugin';
 
 export default defineConfig({
-  // Relative base so the build works on any host or sub-path (GitHub Pages, Netlify, EAS Hosting...).
-  base: './',
+  base: '/',
   server: {
     host: true, // reachable from a phone on the same Wi-Fi during development
   },
   plugins: [
     react(),
+    apiDevPlugin(), // dev only: serves /api with an embedded Postgres
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png'],
@@ -21,8 +22,8 @@ export default defineConfig({
         background_color: '#F3F6FB',
         display: 'standalone',
         orientation: 'portrait',
-        start_url: './',
-        scope: './',
+        start_url: '/',
+        scope: '/',
         icons: [
           { src: 'pwa-64x64.png', sizes: '64x64', type: 'image/png' },
           { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
@@ -32,6 +33,8 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],
+        // Never answer API calls from the offline cache.
+        navigateFallbackDenylist: [/^\/api\//],
         globIgnores: ['**/icon.png'], // 1024px source icon, only used to generate the others
         // Cache the OCR engine and English language data after first use so scanning works offline.
         runtimeCaching: [

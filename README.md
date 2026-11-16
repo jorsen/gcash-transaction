@@ -1,50 +1,52 @@
 # GCash Tracker
 
-A web app you can **install to your home screen** (PWA) on Android and iPhone.
-It records GCash transactions from receipts: capture a receipt with the camera or pick a
-screenshot from your gallery. The app reads the details, you check them, and it saves the transaction.
+A web app (installable on Android and iPhone) for a store that handles GCash transactions.
+Tinderas capture or upload GCash receipts. The app reads the details, they check them and save,
+and the **owner sees every transaction from any device**.
 
 ## Features
 
-- **Capture Receipt / From Gallery** using the phone's camera or photo picker.
-- **Text recognition in the browser** (Tesseract.js) fills in the amount, reference number,
-  date and time, type, name, and mobile number. Every field can be edited before saving.
-- **Duplicate warning** when a reference number is already saved.
-- **Monthly summary** of money out and money in, plus search by name, reference number, note, or type.
-- **Data stays on the phone** in the browser's IndexedDB. Receipt images are shrunk to about 150 KB each
-  and never uploaded.
-- **Menu (⋮):** Export to Excel (CSV), Back up (including images), and Restore (also onto a new phone).
-- **Works offline** after the first scan. The first scan downloads the English text model (a few MB),
-  which is then cached.
+- **Accounts:** one **owner** plus **tindera** accounts (username + password) that the owner creates.
+  - **Owner:** sees all transactions, filters by tindera, edits and deletes, manages staff (add, reset password,
+    deactivate), and exports to Excel (CSV).
+  - **Tindera:** records transactions, and sees and edits only her own. She can't delete.
+- **Capture Receipt / From Gallery**, then **text recognition in the browser** (Tesseract.js) fills in the
+  amount, reference number, date and time, type, name, and mobile number. Every field can be edited before saving.
+- **Duplicate warning** when a reference number was already recorded by anyone in the store.
+- **Monthly summary** (money out and money in) with previous/next month, plus search.
+- **Cloud storage in PostgreSQL**: transactions and compressed receipt images (~150 KB each).
+- Records saved on a phone by the earlier offline-only version can be uploaded with one tap.
 
-## Project layout
+## How it fits together
 
 | Path | Purpose |
 | --- | --- |
-| `src/App.tsx` | Home: install banner, summary, capture/gallery buttons, list, menu |
-| `src/Review.tsx` | Review, edit, or delete a transaction |
-| `src/parseGcash.ts` | Turns OCR text into fields (amount, ref no., date, type, recipient) |
-| `src/ocr.ts` | Text recognition (Tesseract.js worker) |
-| `src/image.ts` | Image orientation fix and compression |
-| `src/db.ts` | IndexedDB storage (Dexie) |
-| `src/backup.ts` | CSV export and JSON backup/restore |
-| `vite.config.ts` | Build and PWA (manifest, service worker, offline caching) |
+| `api/index.ts` | The single Vercel Function; `vercel.json` routes all `/api/*` requests to it |
+| `server/router.ts` | API routes: session, setup, login, staff, transactions, images |
+| `server/auth.ts` | Password hashing (scrypt) and login sessions (HttpOnly cookie, hashed tokens in the DB) |
+| `server/db.ts` | PostgreSQL access (Neon driver) and automatic table creation |
+| `src/` | The web app (React): `App.tsx`, `Review.tsx`, `Staff.tsx`, `Login.tsx`, OCR, and the receipt parser |
+| `dev/apiDevPlugin.ts` | Local development only: runs the API inside `npm run dev` with an embedded Postgres |
+
+Tables (created automatically on first request): `users`, `sessions`, `transactions`, `receipt_images`.
+
+## Deploy on Vercel
+
+1. **Database:** Vercel project → **Storage** → **Create Database** → **Neon (Serverless Postgres)** → free plan → connect it
+   to this project for all environments. This adds `DATABASE_URL`.
+2. **Setup code:** Vercel project → **Settings → Environment Variables** → add `SETUP_CODE` with a secret
+   phrase of your choice. It's needed once, to create the owner account.
+3. **Deploy:** push to `main` (or click **Redeploy**), so the deployment picks up both variables.
+4. Open the site. The first screen asks for the setup code, then creates the **owner** account.
+5. Owner: ⋮ menu → **Staff accounts** → add each tindera with a username and password.
 
 ## Develop
 
 ```bash
 npm install
-npm run dev       # http://localhost:5173 (also reachable from a phone on the same Wi-Fi)
-npm run build     # type-check and build the static site into dist/
-npm run icons     # regenerate app icons from public/icon.png
+npm run dev     # http://localhost:5173. API with an embedded Postgres in ./.pglite; setup code: dev-setup
+npm run build   # type-check + build
 ```
 
-The camera, installing, and offline mode need **HTTPS**, so test those on the deployed site.
-
-## Deploy (Vercel, free)
-
-1. Go to vercel.com → **Add New → Project** → import `jorsen/gcash-transaction` from GitHub.
-2. Keep the defaults (Vercel detects Vite; output folder `dist`). Click **Deploy**.
-3. Every push to `main` redeploys automatically.
-
-Open the site on your phone and tap **Install app**. On iPhone, use Safari's **Share → Add to Home Screen**.
+Set `DATABASE_URL` before `npm run dev` to use a real Postgres instead.
+The camera, installing, and offline mode need HTTPS, so test those on the deployed site.

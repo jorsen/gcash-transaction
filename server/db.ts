@@ -1,0 +1,79 @@
+import { neon } from '@neondatabase/serverless';
+
+export type QueryFn = <T = Record<string, unknown>>(text: string, params?: unknown[]) => Promise<T[]>;
+
+declare global {
+  // Lets local dev/tests plug in an embedded Postgres (PGlite) instead of Neon.
+  var __gcashQuery: QueryFn | undefined;
+}
+
+let neonQuery: QueryFn | null = null;
+
+function getQuery(): QueryFn {
+  if (globalThis.__gcashQuery) return globalThis.__gcashQuery;
+  if (!neonQuery) {
+    const url = process.env.DATABASE_URL ?? process.env.POSTGRES_URL;
+    if (!url) throw new Error('DATABASE_URL is not set. Connect a Postgres database (Neon) to the Vercel project.');
+    const sql = neon(url);
+    neonQuery = (text, params = []) => sql.query(text, params) as never;
+  }
+  return neonQuery;
+}
+
+let schemaReady: Promise<void> | null = null;
+
+const SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('owner', 'tindera')),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS transactions (
+    id SERIAL PRIMARY KEY,
+    type TEXT NOT NULL,
+    amount NUMERIC(12, 2) NOT NULL,
+    ref_no TEXT NOT NULL DEFAULT '',
+    recipient TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    txn_date TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    raw_text TEXT NOT NULL DEFAULT '',
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS transactions_txn_date_idx ON transactions (txn_date)`,
+  `CREATE INDEX IF NOT EXISTS transactions_ref_no_idx ON transactions (ref_no)`,
+  `CREATE INDEX IF NOT EXISTS transactions_created_by_idx ON transactions (created_by)`,
+  `CREATE TABLE IF NOT EXISTS receipt_images (
+    txn_id INTEGER PRIMARY KEY REFERENCES transactions(id) ON DELETE CASCADE,
+    mime TEXT NOT NULL,
+    data BYTEA NOT NULL
+  )`,
+];
+
+/** Creates tables on first use (idempotent), so there is no separate migration step. */
+function ensureSchema() {
+  schemaReady ??= (async () => {
+    const q = getQuery();
+    for (const stmt of SCHEMA) await q(stmt);
+  })().catch((e) => {
+    schemaReady = null;
+    throw e;
+  });
+  return schemaReady;
+}
+
+export async function query<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
+  await ensureSchema();
+  return getQuery()<T>(text, params);
+}
