@@ -178,3 +178,43 @@ textarea.input { resize: vertical; }
 .biz-open { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; }
 .biz-open:disabled { opacity: 1; }
 .chevron { font-size: 24px; color: var(--muted); }
+
+/* ---------- password show/hide ---------- */
+.password-wrap { position: relative; display: block; }
+.password-wrap .input { padding-right: 46px; }
+.eye-btn {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  width: 38px; height: 38px; border-radius: 19px; display: grid; place-items: center; color: var(--muted);
+}
+.eye-btn:active, .eye-btn[aria-pressed="true"] { color: var(--blue); }
+
+/* ---------- tabs ---------- */
+.tabs { display: flex; background: var(--card); border-radius: 12px; padding: 4px; gap: 4px; border: 1px solid var(--border); }
+.tabs button { flex: 1; padding: 10px; border-radius: 9px; font-weight: 700; color: var(--muted); display: flex; justify-content: center; align-items: center; gap: 6px; }
+.tabs button.active { background: var(--blue); color: #fff; }
+.tab-badge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--red); color: #fff; font-size: 12px; display: inline-grid; place-items: center; }
+
+/* ---------- cash-in ---------- */
+.hint { color: var(--muted); font-size: 12px; }
+.mono, .masked-name { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; letter-spacing: 0.04em; }
+input.mono { text-transform: uppercase; }
+.success { color: var(--green); font-size: 14px; font-weight: 600; }
+.section-title { margin: 4px 0 0; font-size: 15px; color: var(--muted); }
+.empty.small { margin-top: 8px; }
+.cashin-card { position: relative; display: flex; flex-direction: column; gap: 6px; background: var(--card); border-radius: 14px; padding: 14px; border-left: 4px solid var(--blue); }
+.cashin-card.done { border-left-color: var(--green); opacity: 0.8; }
+.cashin-card.cancelled { border-left-color: var(--muted); opacity: 0.6; }
+.cashin-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.cashin-number { font-size: 22px; font-weight: 800; letter-spacing: 0.03em; font-variant-numeric: tabular-nums; }
+.cashin-amount { font-size: 18px; font-weight: 700; color: var(--blue); white-space: nowrap; }
+.masked-name { font-size: 17px; font-weight: 700; }
+.mask-char { color: var(--muted); opacity: 0.55; }
+.cashin-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.cashin-actions .btn { flex: 1 1 auto; flex-direction: row; justify-content: center; padding: 12px; }
+.cashin-actions .link { flex: none; }
+.copy-btn.copied { background: var(--green); }
+.done-btn { background: var(--card); color: var(--green); border: 1px solid var(--green); }
+.status-pill { position: absolute; top: 12px; right: 12px; font-size: 11px; font-weight: 700; border-radius: 8px; padding: 2px 8px; }
+.status-pill.done { background: var(--green); color: #fff; }
+.status-pill.cancelled { background: var(--border); color: var(--muted); }
+.cashin-card:not(.pending) .cashin-amount { margin-right: 64px; }

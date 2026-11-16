@@ -89,6 +89,33 @@ const SCHEMA = [
     UPDATE transactions t SET business_id = u.business_id
       FROM users u WHERE t.created_by = u.id AND t.business_id IS NULL;
   END $$`,
+  // v3: push notifications + cash-in requests.
+  `CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx ON push_subscriptions (user_id)`,
+  `CREATE TABLE IF NOT EXISTS cashin_requests (
+    id SERIAL PRIMARY KEY,
+    business_id INTEGER NOT NULL REFERENCES businesses(id),
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    number TEXT NOT NULL,
+    gcash_name TEXT NOT NULL,
+    amount NUMERIC(12, 2),
+    note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done', 'cancelled')),
+    handled_by INTEGER REFERENCES users(id),
+    handled_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS cashin_requests_business_idx ON cashin_requests (business_id, status, created_at)`,
 ];
 
 /** Creates tables on first use (idempotent), so there is no separate migration step. */

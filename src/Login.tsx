@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { api, type User } from './api';
+import { PasswordInput } from './PasswordInput';
 
 /** Login screen, plus the one-time super admin setup while no super admin exists. */
 export function Login({ needsSetup: setupAvailable, onLoggedIn }: { needsSetup: boolean; onLoggedIn: (u: User) => void }) {
@@ -63,9 +64,7 @@ export function Login({ needsSetup: setupAvailable, onLoggedIn }: { needsSetup: 
         </label>
         <label className="field">
           <span className="label">Password</span>
-          <input
-            className="input"
-            type="password"
+          <PasswordInput
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete={needsSetup ? 'new-password' : 'current-password'}

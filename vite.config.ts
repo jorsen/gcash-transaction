@@ -33,6 +33,8 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],
+        // Push notification handlers (public/push-sw.js).
+        importScripts: ['push-sw.js'],
         // Never answer API calls from the offline cache.
         navigateFallbackDenylist: [/^\/api\//],
         globIgnores: ['**/icon.png'], // 1024px source icon, only used to generate the others

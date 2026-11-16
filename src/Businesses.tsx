@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api, type Business, type User } from './api';
+import { PasswordInput } from './PasswordInput';
 
 /** Super admin home: all businesses, add a business (with its first owner), activate/deactivate. */
 export function Businesses({
@@ -132,7 +133,7 @@ export function Businesses({
             </label>
             <label className="field">
               <span className="label">Owner's password (at least 6 characters)</span>
-              <input className="input" value={form.ownerPassword} onChange={(e) => set('ownerPassword', e.target.value)} autoComplete="new-password" required />
+              <PasswordInput value={form.ownerPassword} onChange={(e) => set('ownerPassword', e.target.value)} autoComplete="new-password" required />
             </label>
             {formError && <div className="error">{formError}</div>}
             <div className="actions">

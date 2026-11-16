@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api, type StaffUser, type User } from './api';
+import { PasswordInput } from './PasswordInput';
 
 /**
  * Staff of one business.
@@ -151,7 +152,7 @@ export function Staff({
           </label>
           <label className="field">
             <span className="label">Password (at least 6 characters)</span>
-            <input className="input" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" required />
+            <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" required />
           </label>
           {error && <div className="error">{error}</div>}
           <button className="btn primary block" disabled={busy}>

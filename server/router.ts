@@ -11,6 +11,11 @@ import {
   type User,
 } from './auth.js';
 import { query } from './db.js';
+import { notifyOwners, notifyUsers, publicKey, removeSubscription, saveSubscription } from './push.js';
+
+const peso = (n: number) => `₱${n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** "09171234567" -> "0917 123 4567" */
+const prettyNumber = (n: string) => n.replace(/^(\d{4})(\d{3})(\d{4})$/, '$1 $2 $3');
 
 /*
  * Roles
@@ -62,6 +67,15 @@ function businessScope(me: User, requested: unknown): number {
   const id = Number(requested);
   if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Choose a business first.');
   return id;
+}
+
+/** Accepts 09XX…, +63 9XX…, 63 9XX…, 9XX… with any spacing; returns "09XXXXXXXXX". */
+function cleanMobile(v: unknown) {
+  let d = String(v ?? '').replace(/\D/g, '');
+  if (d.startsWith('63') && d.length === 12) d = '0' + d.slice(2);
+  if (d.startsWith('9') && d.length === 10) d = '0' + d;
+  if (!/^09\d{9}$/.test(d)) throw new HttpError(400, 'Enter an 11-digit mobile number, e.g. 0917 123 4567.');
+  return d;
 }
 
 const USERNAME = /^[a-z0-9._-]{3,30}$/;
@@ -402,7 +416,142 @@ async function route(req: Request): Promise<Response> {
       [t.type, t.amount, t.refNo, t.recipient, t.phone, t.txnDate, t.note, t.rawText, me.id, businessId],
     );
     await saveImage(row.id, img);
+    await notifyOwners(
+      businessId,
+      me.id,
+      {
+        title: `New receipt from ${me.name}`,
+        body: `${t.type} ${peso(t.amount)}${t.recipient ? ` · ${t.recipient}` : ''}${t.refNo ? ` · Ref ${t.refNo}` : ''}`,
+        url: `/?txn=${row.id}`,
+        tag: `txn-${row.id}`,
+      },
+      url.origin,
+    );
     return json({ id: row.id });
+  }
+
+  // ---------- push notifications ----------
+  if (path === 'push/key' && m === 'GET') {
+    requireUser(user);
+    return json({ publicKey: await publicKey() });
+  }
+
+  if (path === 'push/subscribe' && m === 'POST') {
+    const me = requireUser(user);
+    const b = await body<{ endpoint?: string; keys?: { p256dh?: string; auth?: string } }>(req);
+    if (!b.endpoint?.startsWith('https://') || !b.keys?.p256dh || !b.keys?.auth) throw new HttpError(400, 'Invalid subscription.');
+    await saveSubscription(me.id, { endpoint: b.endpoint, keys: { p256dh: b.keys.p256dh, auth: b.keys.auth } });
+    return json({ ok: true });
+  }
+
+  if (path === 'push/unsubscribe' && m === 'POST') {
+    const me = requireUser(user);
+    const b = await body<{ endpoint?: string }>(req);
+    if (b.endpoint) await removeSubscription(me.id, b.endpoint);
+    return json({ ok: true });
+  }
+
+  if (path === 'push/test' && m === 'POST') {
+    const me = requireUser(user);
+    await notifyUsers(
+      [me.id],
+      { title: 'Notifications are on ✓', body: 'You will be notified about new receipts and cash-in requests.', url: '/', tag: 'test' },
+      url.origin,
+    );
+    return json({ ok: true });
+  }
+
+  // ---------- cash-in requests ----------
+  // Tindera: customer's mobile number + GCash name (asterisks allowed, as GCash shows it) + amount.
+  // Owner: copies the number, sends the money in GCash, then marks it done.
+  if (path === 'cashin' && m === 'GET') {
+    const me = requireUser(user);
+    const businessId = businessScope(me, url.searchParams.get('businessId'));
+    const params: unknown[] = [businessId];
+    let where = 'c.business_id = $1';
+    if (me.role === 'tindera') {
+      params.push(me.id);
+      where += ` AND c.created_by = $${params.length}`;
+    }
+    const [{ pending }] = await query<{ pending: number }>(
+      `SELECT COUNT(*)::int AS pending FROM cashin_requests c WHERE ${where} AND c.status = 'pending'`,
+      params,
+    );
+    if (url.searchParams.get('status') === 'pending') where += ` AND c.status = 'pending'`;
+    const items = await query(
+      `SELECT c.id, c.number, c.gcash_name AS "gcashName", c.amount::float8 AS amount, c.note, c.status,
+              c.created_at AS "createdAt", c.handled_at AS "handledAt", c.created_by AS "createdBy",
+              cu.name AS "createdByName", hu.name AS "handledByName"
+         FROM cashin_requests c JOIN users cu ON cu.id = c.created_by LEFT JOIN users hu ON hu.id = c.handled_by
+        WHERE ${where}
+        ORDER BY (c.status = 'pending') DESC, c.created_at DESC LIMIT 200`,
+      params,
+    );
+    return json({ items, pending });
+  }
+
+  if (path === 'cashin' && m === 'POST') {
+    const me = requireUser(user);
+    const b = await body<{ number: string; gcashName: string; amount?: number | string | null; note?: string; businessId?: number }>(req);
+    const businessId = businessScope(me, b.businessId);
+    const number = cleanMobile(b.number);
+    const gcashName = String(b.gcashName ?? '').trim().replace(/\s+/g, ' ');
+    if (!gcashName || gcashName.length > 80) throw new HttpError(400, 'Enter the GCash name (asterisks are OK, e.g. JU** DE* C.).');
+    let amount: number | null = null;
+    if (b.amount !== undefined && b.amount !== null && String(b.amount).trim() !== '') {
+      amount = Number(String(b.amount).replace(/,/g, ''));
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) throw new HttpError(400, 'Please enter a valid amount.');
+      amount = Math.round(amount * 100) / 100;
+    }
+    const note = String(b.note ?? '').trim().slice(0, 500);
+    const [row] = await query<{ id: number }>(
+      `INSERT INTO cashin_requests (business_id, created_by, number, gcash_name, amount, note)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [businessId, me.id, number, gcashName, amount, note],
+    );
+    await notifyOwners(
+      businessId,
+      me.id,
+      {
+        title: `Cash-in request${amount ? ` · ${peso(amount)}` : ''}`,
+        body: `${prettyNumber(number)} · ${gcashName} — from ${me.name}`,
+        url: '/?view=cashin',
+        tag: `cashin-${row.id}`,
+      },
+      url.origin,
+    );
+    return json({ id: row.id });
+  }
+
+  if (parts[0] === 'cashin' && parts.length === 2 && m === 'PATCH') {
+    const me = requireUser(user);
+    const id = Number(parts[1]);
+    const [r] = await query<{ businessId: number; createdBy: number; status: string; number: string; gcashName: string; amount: number | null }>(
+      `SELECT business_id AS "businessId", created_by AS "createdBy", status, number, gcash_name AS "gcashName",
+              amount::float8 AS amount FROM cashin_requests WHERE id = $1`,
+      [id],
+    );
+    if (!r || (me.role !== 'superadmin' && r.businessId !== me.businessId)) throw new HttpError(404, 'Request not found.');
+    const b = await body<{ status: 'done' | 'cancelled' }>(req);
+    if (b.status !== 'done' && b.status !== 'cancelled') throw new HttpError(400, 'Invalid status.');
+    if (me.role === 'tindera' && (r.createdBy !== me.id || b.status !== 'cancelled')) {
+      throw new HttpError(403, 'Only the owner can mark a cash-in as done.');
+    }
+    if (r.status !== 'pending') throw new HttpError(409, `This request is already ${r.status}.`);
+    await query(`UPDATE cashin_requests SET status = $1, handled_by = $2, handled_at = NOW() WHERE id = $3`, [b.status, me.id, id]);
+    if (r.createdBy !== me.id) {
+      await notifyUsers(
+        [r.createdBy],
+        {
+          title: b.status === 'done' ? 'Cash-in sent ✓' : 'Cash-in cancelled',
+          body: `${r.amount ? `${peso(r.amount)} to ` : ''}${prettyNumber(r.number)} · ${r.gcashName}`,
+          url: '/?view=cashin',
+          tag: `cashin-${id}`,
+        },
+        url.origin,
+      );
+    }
+    return json({ ok: true });
   }
 
   if (path === 'check-ref' && m === 'GET') {

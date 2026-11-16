@@ -67,6 +67,22 @@ export interface TxnPayload {
   businessId?: number;
 }
 
+export interface CashinRequest {
+  id: number;
+  /** "09XXXXXXXXX" */
+  number: string;
+  /** As GCash shows it; may contain asterisks, e.g. "JU** DE* C." */
+  gcashName: string;
+  amount: number | null;
+  note: string;
+  status: 'pending' | 'done' | 'cancelled';
+  createdAt: string;
+  handledAt: string | null;
+  createdBy: number;
+  createdByName: string;
+  handledByName: string | null;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -132,6 +148,21 @@ export const api = {
   addTransaction: (b: TxnPayload) => request<{ id: number }>('POST', 'transactions', b),
   updateTransaction: (id: number, b: TxnPayload) => request<{ ok: true }>('PUT', `transactions/${id}`, b),
   deleteTransaction: (id: number) => request<{ ok: true }>('DELETE', `transactions/${id}`),
+  pushKey: () => request<{ publicKey: string }>('GET', 'push/key'),
+  pushSubscribe: (sub: PushSubscriptionJSON) => request<{ ok: true }>('POST', 'push/subscribe', sub),
+  pushUnsubscribe: (endpoint: string) => request<{ ok: true }>('POST', 'push/unsubscribe', { endpoint }),
+  pushTest: () => request<{ ok: true }>('POST', 'push/test'),
+
+  cashin: (q: { businessId?: number | null; pendingOnly?: boolean }) => {
+    const p = new URLSearchParams();
+    if (q.businessId) p.set('businessId', String(q.businessId));
+    if (q.pendingOnly) p.set('status', 'pending');
+    return request<{ items: CashinRequest[]; pending: number }>('GET', `cashin?${p}`);
+  },
+  addCashin: (b: { number: string; gcashName: string; amount?: string; note?: string; businessId?: number | null }) =>
+    request<{ id: number }>('POST', 'cashin', b),
+  updateCashin: (id: number, status: 'done' | 'cancelled') => request<{ ok: true }>('PATCH', `cashin/${id}`, { status }),
+
   checkRef: (ref: string, excludeId?: number, businessId?: number | null) =>
     request<{ duplicate: { refNo: string; txnDate: string; recipient: string; type: string; createdByName: string } | null }>(
       'GET',

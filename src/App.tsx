@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { api, imageUrl, setUnauthorizedHandler, type StaffUser, type Summary, type Txn, type User } from './api';
 import { Businesses } from './Businesses';
+import { CashIn } from './CashIn';
+import { disablePush, enablePush, getPushState, syncPushSubscription, unlinkPushSubscription, type PushState } from './push';
 import { exportCsv, uploadLocalRecords } from './backup';
 import { countLocal } from './db';
 import { isIncoming, peso, prettyDate } from './format';
@@ -104,6 +106,7 @@ export function App() {
       <Login
         needsSetup={session.needsSetup}
         onLoggedIn={(user) => {
+          syncPushSubscription();
           setSession({ user, needsSetup: false });
           setStack([]);
         }}
@@ -113,6 +116,7 @@ export function App() {
 
   const user = session.user;
   const logout = async () => {
+    await unlinkPushSubscription();
     await api.logout().catch(() => undefined);
     setSession({ user: null, needsSetup: false });
   };
@@ -176,8 +180,63 @@ function Home({
   const [uploading, setUploading] = useState('');
   const [installEvt, setInstallEvt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showIosHint, setShowIosHint] = useState(false);
+  const [tab, setTab] = useState<'receipts' | 'cashin'>(() =>
+    new URLSearchParams(location.search).get('view') === 'cashin' ? 'cashin' : 'receipts',
+  );
+  const [pendingCashin, setPendingCashin] = useState(0);
+  const [pushState, setPushState] = useState<PushState | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
+
+  // Links from notifications: "/?view=cashin" or "/?txn=123". Handle on load and while the app is open.
+  useEffect(() => {
+    const openUrl = (href: string) => {
+      const p = new URL(href, location.origin).searchParams;
+      if (p.get('view') === 'cashin') setTab('cashin');
+      const txn = Number(p.get('txn'));
+      if (txn) {
+        setTab('receipts');
+        onOpen({ name: 'review', id: txn });
+      }
+    };
+    if (location.search) {
+      openUrl(location.href);
+      history.replaceState(history.state, '', location.pathname);
+    }
+    const onMsg = (e: MessageEvent) => e.data?.type === 'open-url' && openUrl(e.data.url);
+    navigator.serviceWorker?.addEventListener('message', onMsg);
+    return () => navigator.serviceWorker?.removeEventListener('message', onMsg);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!isSuper) getPushState().then(setPushState).catch(() => setPushState('unsupported'));
+  }, [isSuper]);
+
+  // Badge count of waiting cash-in requests (refreshes every 30 s while the app is visible).
+  useEffect(() => {
+    const refresh = () =>
+      document.visibilityState === 'visible' &&
+      api
+        .cashin({ businessId: scopeId, pendingOnly: true })
+        .then((r) => setPendingCashin(r.pending))
+        .catch(() => undefined);
+    refresh();
+    const t = setInterval(refresh, 30000);
+    return () => clearInterval(t);
+  }, [scopeId]);
+
+  const togglePush = async () => {
+    setPushBusy(true);
+    try {
+      setPushState(pushState === 'on' ? await disablePush() : await enablePush());
+    } catch (e) {
+      alert(`Could not turn on notifications: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -271,6 +330,11 @@ function Home({
                 {isOwner && (
                   <button onClick={() => exportCsv(items, search ? 'search' : month)}>Export to Excel (CSV)</button>
                 )}
+                {pushState && pushState !== 'unsupported' && pushState !== 'needs-install' && (
+                  <button onClick={togglePush} disabled={pushState === 'denied'}>
+                    {pushState === 'on' ? 'Turn off notifications' : pushState === 'denied' ? 'Notifications blocked' : 'Turn on notifications'}
+                  </button>
+                )}
                 {!isSuper && <button onClick={changePassword}>Change password</button>}
                 {!isSuper && <button onClick={onLogout}>Log out</button>}
               </div>
@@ -307,6 +371,37 @@ function Home({
           </div>
         )}
 
+        {pushState === 'off' && (
+          <div className="notice column">
+            <span>
+              🔔 <strong>Turn on notifications</strong> to know right away when{' '}
+              {isOwner ? 'a tindera uploads a receipt or sends a cash-in request' : 'the owner sends your cash-in requests'}.
+            </span>
+            <button className="btn primary block" onClick={togglePush} disabled={pushBusy}>
+              {pushBusy ? 'Please wait…' : 'Turn on notifications'}
+            </button>
+          </div>
+        )}
+        {pushState === 'needs-install' && !canInstall && (
+          <div className="notice">🔔 For notifications on iPhone, add this app to your Home Screen (Share → Add to Home Screen) and open it from there.</div>
+        )}
+        {pushState === 'denied' && (
+          <div className="notice">🔕 Notifications are blocked for this site. Allow them in your browser or phone settings to get alerts.</div>
+        )}
+
+        <div className="tabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'receipts'} className={tab === 'receipts' ? 'active' : ''} onClick={() => setTab('receipts')}>
+            Receipts
+          </button>
+          <button role="tab" aria-selected={tab === 'cashin'} className={tab === 'cashin' ? 'active' : ''} onClick={() => setTab('cashin')}>
+            Cash-in {pendingCashin > 0 && <span className="tab-badge">{pendingCashin}</span>}
+          </button>
+        </div>
+
+        {tab === 'cashin' ? (
+          <CashIn user={user} businessId={scopeId} onPendingChange={setPendingCashin} />
+        ) : (
+        <>
         <section className="summary">
           <div className="month-nav">
             <button aria-label="Previous month" onClick={() => setMonth((m) => shiftMonth(m, -1))} disabled={Boolean(search)}>
@@ -412,6 +507,8 @@ function Home({
               </li>
             ))}
           </ul>
+        )}
+        </>
         )}
       </main>
     </div>
