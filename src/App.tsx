@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { api, imageUrl, setUnauthorizedHandler, type StaffUser, type Summary, type Txn, type User } from './api';
+import { Businesses } from './Businesses';
 import { exportCsv, uploadLocalRecords } from './backup';
 import { countLocal } from './db';
 import { isIncoming, peso, prettyDate } from './format';
@@ -7,7 +8,23 @@ import { Login } from './Login';
 import { Review } from './Review';
 import { Staff } from './Staff';
 
-type View = { name: 'home' } | { name: 'review'; file?: File; id?: number } | { name: 'staff' };
+type Biz = { id: number; name: string };
+/** Screens pushed on top of the base screen (Businesses for the super admin, Home for everyone else). */
+type View = { name: 'biz'; biz: Biz } | { name: 'review'; file?: File; id?: number } | { name: 'staff' };
+type Open = (v: View) => void;
+
+async function changePassword() {
+  const current = prompt('Current password:');
+  if (!current) return;
+  const next = prompt('New password (at least 6 characters):');
+  if (!next) return;
+  try {
+    await api.changePassword(current, next);
+    alert('Password changed.');
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e));
+  }
+}
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -37,7 +54,7 @@ const isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
 export function App() {
   const [session, setSession] = useState<{ user: User | null; needsSetup: boolean } | null>(null);
   const [sessionError, setSessionError] = useState('');
-  const [view, setView] = useState<View>({ name: 'home' });
+  const [stack, setStack] = useState<View[]>([]);
 
   const loadSession = useCallback(() => {
     setSessionError('');
@@ -54,14 +71,14 @@ export function App() {
 
   // The phone's Back button/gesture returns to the list instead of leaving the app.
   useEffect(() => {
-    const onPop = () => setView({ name: 'home' });
+    const onPop = () => setStack((s) => s.slice(0, -1));
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  const open = (v: Exclude<View, { name: 'home' }>) => {
+  const open: Open = (v) => {
     history.pushState({ sub: true }, '');
-    setView(v);
+    setStack((s) => [...s, v]);
   };
   const close = () => history.back();
 
@@ -88,7 +105,7 @@ export function App() {
         needsSetup={session.needsSetup}
         onLoggedIn={(user) => {
           setSession({ user, needsSetup: false });
-          setView({ name: 'home' });
+          setStack([]);
         }}
       />
     );
@@ -100,21 +117,52 @@ export function App() {
     setSession({ user: null, needsSetup: false });
   };
 
-  if (view.name === 'review') return <Review user={user} file={view.file} id={view.id} onDone={close} />;
-  if (view.name === 'staff') return <Staff onBack={close} />;
-  return <Home user={user} onOpen={open} onLogout={logout} />;
+  const top = stack[stack.length - 1];
+  const isSuper = user.role === 'superadmin';
+  // The business being worked on: the super admin's chosen one, otherwise the user's own.
+  const biz: Biz | null = isSuper
+    ? ([...stack].reverse().find((v): v is Extract<View, { name: 'biz' }> => v.name === 'biz')?.biz ?? null)
+    : { id: user.businessId as number, name: user.businessName ?? '' };
+
+  if (!top || !biz) {
+    if (isSuper) {
+      return (
+        <Businesses
+          user={user}
+          onOpen={(b) => open({ name: 'biz', biz: { id: b.id, name: b.name } })}
+          onChangePassword={changePassword}
+          onLogout={logout}
+        />
+      );
+    }
+    return <Home user={user} biz={biz as Biz} onOpen={open} onLogout={logout} />;
+  }
+  if (top.name === 'review') {
+    return <Review user={user} businessId={isSuper ? biz.id : null} file={top.file} id={top.id} onDone={close} />;
+  }
+  if (top.name === 'staff') {
+    return <Staff me={user} businessId={isSuper ? biz.id : null} businessName={biz.name} onBack={close} />;
+  }
+  return <Home user={user} biz={biz} onOpen={open} onLogout={logout} onBack={close} />;
 }
 
 function Home({
   user,
+  biz,
   onOpen,
   onLogout,
+  onBack,
 }: {
   user: User;
-  onOpen: (v: { name: 'review'; file?: File; id?: number } | { name: 'staff' }) => void;
+  biz: Biz;
+  onOpen: Open;
   onLogout: () => void;
+  /** Super admin: back to the business list. */
+  onBack?: () => void;
 }) {
-  const isOwner = user.role === 'owner';
+  const isSuper = user.role === 'superadmin';
+  const isOwner = user.role !== 'tindera'; // owner or super admin: sees and manages the whole business
+  const scopeId = isSuper ? biz.id : null;
   const [month, setMonth] = useState(thisMonth);
   const [search, setSearch] = useState('');
   const [staffFilter, setStaffFilter] = useState<number | null>(null);
@@ -135,7 +183,7 @@ function Home({
     setLoading(true);
     setError('');
     try {
-      const r = await api.transactions({ month, search: search.trim(), userId: staffFilter });
+      const r = await api.transactions({ month, search: search.trim(), userId: staffFilter, businessId: scopeId });
       setItems(r.items);
       setSummary(r.summary);
     } catch (e) {
@@ -143,7 +191,7 @@ function Home({
     } finally {
       setLoading(false);
     }
-  }, [month, search, staffFilter]);
+  }, [month, search, staffFilter, scopeId]);
 
   // Debounce so typing in the search box doesn't fire a request per keystroke.
   useEffect(() => {
@@ -152,9 +200,9 @@ function Home({
   }, [load, search]);
 
   useEffect(() => {
-    if (isOwner) api.users().then((r) => setStaff(r.users)).catch(() => undefined);
-    countLocal().then(setLocalCount);
-  }, [isOwner]);
+    if (isOwner) api.users(scopeId).then((r) => setStaff(r.users)).catch(() => undefined);
+    if (!isSuper) countLocal().then(setLocalCount);
+  }, [isOwner, isSuper, scopeId]);
 
   useEffect(() => {
     const onPrompt = (e: Event) => {
@@ -194,29 +242,21 @@ function Home({
     }
   };
 
-  const changePassword = async () => {
-    const current = prompt('Current password:');
-    if (!current) return;
-    const next = prompt('New password (at least 6 characters):');
-    if (!next) return;
-    try {
-      await api.changePassword(current, next);
-      alert('Password changed.');
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const canInstall = !isStandalone() && (installEvt !== null || isIos());
+  const canInstall = !isSuper && !isStandalone() && (installEvt !== null || isIos());
   const tinderas = staff.filter((s) => s.role === 'tindera');
 
   return (
     <div className="page">
       <header className="appbar">
+        {onBack && (
+          <button className="icon-btn" aria-label="Back to businesses" onClick={onBack}>
+            ←
+          </button>
+        )}
         <div className="appbar-title">
-          <h1>GCash Tracker</h1>
+          <h1>{isSuper ? biz.name : 'GCash Tracker'}</h1>
           <small>
-            {user.name} · {isOwner ? 'Owner' : 'Tindera'}
+            {isSuper ? 'Super admin view' : `${user.name} · ${user.role === 'owner' ? 'Owner' : 'Tindera'} · ${biz.name}`}
           </small>
         </div>
         <div className="menu-wrap">
@@ -231,8 +271,8 @@ function Home({
                 {isOwner && (
                   <button onClick={() => exportCsv(items, search ? 'search' : month)}>Export to Excel (CSV)</button>
                 )}
-                <button onClick={changePassword}>Change password</button>
-                <button onClick={onLogout}>Log out</button>
+                {!isSuper && <button onClick={changePassword}>Change password</button>}
+                {!isSuper && <button onClick={onLogout}>Log out</button>}
               </div>
             </>
           )}
@@ -295,14 +335,16 @@ function Home({
           </div>
         </section>
 
-        <div className="actions">
-          <button className="btn primary" onClick={() => cameraRef.current?.click()}>
-            <span className="btn-icon">📷</span>Capture Receipt
-          </button>
-          <button className="btn secondary" onClick={() => galleryRef.current?.click()}>
-            <span className="btn-icon">🖼️</span>From Gallery
-          </button>
-        </div>
+        {!isSuper && (
+          <div className="actions">
+            <button className="btn primary" onClick={() => cameraRef.current?.click()}>
+              <span className="btn-icon">📷</span>Capture Receipt
+            </button>
+            <button className="btn secondary" onClick={() => galleryRef.current?.click()}>
+              <span className="btn-icon">🖼️</span>From Gallery
+            </button>
+          </div>
+        )}
         <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={onPick} />
         <input ref={galleryRef} type="file" accept="image/*" hidden onChange={onPick} />
 

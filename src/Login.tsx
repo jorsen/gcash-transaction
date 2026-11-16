@@ -1,8 +1,10 @@
 import { useState, type FormEvent } from 'react';
 import { api, type User } from './api';
 
-/** Login screen, or the one-time owner setup when the database has no users yet. */
-export function Login({ needsSetup, onLoggedIn }: { needsSetup: boolean; onLoggedIn: (u: User) => void }) {
+/** Login screen, plus the one-time super admin setup while no super admin exists. */
+export function Login({ needsSetup: setupAvailable, onLoggedIn }: { needsSetup: boolean; onLoggedIn: (u: User) => void }) {
+  // Setup is offered (not forced) while no super admin exists, so existing owners/tinderas can still log in.
+  const [needsSetup, setNeedsSetup] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -32,7 +34,7 @@ export function Login({ needsSetup, onLoggedIn }: { needsSetup: boolean; onLogge
         <img src="/pwa-192x192.png" alt="" className="login-logo" />
         <h1>GCash Tracker</h1>
         <p className="muted">
-          {needsSetup ? 'First time setup: create the owner account.' : 'Log in to record transactions.'}
+          {needsSetup ? 'One-time setup: create the super admin account.' : 'Log in to record transactions.'}
         </p>
 
         {needsSetup && (
@@ -74,8 +76,14 @@ export function Login({ needsSetup, onLoggedIn }: { needsSetup: boolean; onLogge
         {error && <div className="error">{error}</div>}
 
         <button className="btn primary block" disabled={busy}>
-          {busy ? 'Please wait…' : needsSetup ? 'Create owner account' : 'Log in'}
+          {busy ? 'Please wait…' : needsSetup ? 'Create super admin' : 'Log in'}
         </button>
+
+        {setupAvailable && (
+          <button type="button" className="link" onClick={() => { setNeedsSetup((v) => !v); setError(''); }}>
+            {needsSetup ? '← Back to log in' : 'First-time setup (super admin)'}
+          </button>
+        )}
       </form>
     </div>
   );

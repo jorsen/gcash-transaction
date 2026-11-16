@@ -1,15 +1,18 @@
 # GCash Tracker
 
-A web app (installable on Android and iPhone) for a store that handles GCash transactions.
+A web app (installable on Android and iPhone) for stores that handle GCash transactions.
 Tinderas capture or upload GCash receipts. The app reads the details, they check them and save,
-and the **owner sees every transaction from any device**.
+the **owner sees every transaction from any device**, and a **super admin** manages all the businesses.
 
 ## Features
 
-- **Accounts:** one **owner** plus **tindera** accounts (username + password) that the owner creates.
-  - **Owner:** sees all transactions, filters by tindera, edits and deletes, manages staff (add, reset password,
-    deactivate), and exports to Excel (CSV).
-  - **Tindera:** records transactions, and sees and edits only her own. She can't delete.
+- **Accounts (multi-business):**
+  - **Super admin:** creates businesses (each with an owner), adds more owners or tinderas to any business,
+    resets passwords, deactivates staff or a whole business, and views any business's transactions.
+  - **Owner:** sees all of their business's transactions, filters by tindera, edits and deletes, manages their
+    tinderas, and exports to Excel (CSV).
+  - **Tindera:** records transactions for her business, and sees and edits only her own. She can't delete.
+  - Businesses are fully separated: nobody sees another business's data.
 - **Capture Receipt / From Gallery**, then **text recognition in the browser** (Tesseract.js) fills in the
   amount, reference number, date and time, type, name, and mobile number. Every field can be edited before saving.
 - **Duplicate warning** when a reference number was already recorded by anyone in the store.
@@ -28,17 +31,17 @@ and the **owner sees every transaction from any device**.
 | `src/` | The web app (React): `App.tsx`, `Review.tsx`, `Staff.tsx`, `Login.tsx`, OCR, and the receipt parser |
 | `dev/apiDevPlugin.ts` | Local development only: runs the API inside `npm run dev` with an embedded Postgres |
 
-Tables (created automatically on first request): `users`, `sessions`, `transactions`, `receipt_images`.
+Tables (created and migrated automatically on first request): `businesses`, `users`, `sessions`, `transactions`, `receipt_images`.
 
 ## Deploy on Vercel
 
 1. **Database:** Vercel project → **Storage** → **Create Database** → **Neon (Serverless Postgres)** → free plan → connect it
    to this project for all environments. This adds `DATABASE_URL`.
 2. **Setup code:** Vercel project → **Settings → Environment Variables** → add `SETUP_CODE` with a secret
-   phrase of your choice. It's needed once, to create the owner account.
+   phrase of your choice. It is needed once, to create the super admin account.
 3. **Deploy:** push to `main` (or click **Redeploy**), so the deployment picks up both variables.
-4. Open the site. The first screen asks for the setup code, then creates the **owner** account.
-5. Owner: ⋮ menu → **Staff accounts** → add each tindera with a username and password.
+4. Open the site → **First-time setup (super admin)** → enter the setup code and create the **super admin** account.
+5. Super admin: **＋ Add business** for each store (with its owner's login). Owners then add tinderas from ⋮ → **Staff accounts**.
 
 ## Develop
 

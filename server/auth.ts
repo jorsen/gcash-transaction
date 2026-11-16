@@ -4,13 +4,21 @@ import { query } from './db.js';
 
 const scryptAsync = promisify(scrypt) as (pw: string, salt: Buffer, keylen: number) => Promise<Buffer>;
 
-export type Role = 'owner' | 'tindera';
+export type Role = 'superadmin' | 'owner' | 'tindera';
 export interface User {
   id: number;
   username: string;
   name: string;
   role: Role;
+  /** null for the super admin */
+  businessId: number | null;
+  businessName: string | null;
 }
+
+export const USER_COLUMNS = `u.id, u.username, u.name, u.role, u.business_id AS "businessId", b.name AS "businessName"`;
+export const USER_FROM = `users u LEFT JOIN businesses b ON b.id = u.business_id`;
+/** Active account, and (unless super admin) an active business. */
+export const USER_ACTIVE = `u.active AND (u.role = 'superadmin' OR b.active)`;
 
 const COOKIE = 'gcash_sid';
 const SESSION_DAYS = 30;
@@ -69,9 +77,9 @@ export async function currentUser(req: Request): Promise<User | null> {
   const token = readCookie(req, COOKIE);
   if (!token) return null;
   const rows = await query<User>(
-    `SELECT u.id, u.username, u.name, u.role
-       FROM sessions s JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = $1 AND s.expires_at > NOW() AND u.active`,
+    `SELECT ${USER_COLUMNS}
+       FROM sessions s JOIN users u ON u.id = s.user_id LEFT JOIN businesses b ON b.id = u.business_id
+      WHERE s.token_hash = $1 AND s.expires_at > NOW() AND ${USER_ACTIVE}`,
     [sha256(token)],
   );
   return rows[0] ?? null;

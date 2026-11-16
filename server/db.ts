@@ -60,6 +60,35 @@ const SCHEMA = [
     mime TEXT NOT NULL,
     data BYTEA NOT NULL
   )`,
+  // v2: multi-business. Super admin -> businesses -> owners + tinderas; every transaction belongs to a business.
+  // Runs as one statement (one transaction) under an advisory lock, so concurrent cold starts can't race.
+  // Existing single-business data is moved into a first business automatically.
+  `DO $$
+  DECLARE
+    biz INTEGER;
+    owner_name TEXT;
+  BEGIN
+    PERFORM pg_advisory_xact_lock(727274);
+    CREATE TABLE IF NOT EXISTS businesses (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS business_id INTEGER REFERENCES businesses(id);
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS business_id INTEGER REFERENCES businesses(id);
+    CREATE INDEX IF NOT EXISTS users_business_idx ON users (business_id);
+    CREATE INDEX IF NOT EXISTS transactions_business_idx ON transactions (business_id, txn_date);
+    ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+    ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('superadmin', 'owner', 'tindera'));
+    IF EXISTS (SELECT 1 FROM users WHERE business_id IS NULL AND role <> 'superadmin') THEN
+      SELECT name INTO owner_name FROM users WHERE business_id IS NULL AND role = 'owner' ORDER BY id LIMIT 1;
+      INSERT INTO businesses (name) VALUES (COALESCE(owner_name || '''s Business', 'My Business')) RETURNING id INTO biz;
+      UPDATE users SET business_id = biz WHERE business_id IS NULL AND role <> 'superadmin';
+    END IF;
+    UPDATE transactions t SET business_id = u.business_id
+      FROM users u WHERE t.created_by = u.id AND t.business_id IS NULL;
+  END $$`,
 ];
 
 /** Creates tables on first use (idempotent), so there is no separate migration step. */

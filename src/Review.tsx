@@ -30,8 +30,21 @@ const emptyForm = (): Form => ({
   note: '',
 });
 
-export function Review({ user, file, id, onDone }: { user: User; file?: File; id?: number; onDone: () => void }) {
-  const isOwner = user.role === 'owner';
+export function Review({
+  user,
+  businessId,
+  file,
+  id,
+  onDone,
+}: {
+  user: User;
+  /** Super admin: the business being viewed. null for owners/tinderas (their own business). */
+  businessId: number | null;
+  file?: File;
+  id?: number;
+  onDone: () => void;
+}) {
+  const isOwner = user.role !== 'tindera'; // owner or super admin
   /** Newly picked image (not yet uploaded). */
   const [newImage, setNewImage] = useState<Blob | null>(file ?? null);
   /** URL of the image already stored in the cloud (when editing). */
@@ -144,6 +157,7 @@ export function Review({ user, file, id, onDone }: { user: User; file?: File; id
       } else if (id === undefined) {
         payload.image = null;
       }
+      if (businessId) payload.businessId = businessId;
       if (id !== undefined) await api.updateTransaction(id, payload);
       else await api.addTransaction(payload);
       onDone();
@@ -166,7 +180,7 @@ export function Review({ user, file, id, onDone }: { user: User; file?: File; id
     const ref = form.refNo.replace(/\s+/g, '');
     if (ref) {
       try {
-        const { duplicate: d } = await api.checkRef(ref, id);
+        const { duplicate: d } = await api.checkRef(ref, id, businessId);
         if (
           d &&
           !confirm(

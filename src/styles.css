@@ -173,3 +173,8 @@ textarea.input { resize: vertical; }
 .card { background: var(--card); border-radius: 14px; padding: 16px; }
 .card.form { display: flex; flex-direction: column; gap: 12px; }
 .card h2 { margin: 0; font-size: 17px; }
+
+/* ---------- businesses (super admin) ---------- */
+.biz-open { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; }
+.biz-open:disabled { opacity: 1; }
+.chevron { font-size: 24px; color: var(--muted); }

@@ -1,15 +1,28 @@
 import type { TxnType } from './parseGcash';
 
-export type Role = 'owner' | 'tindera';
+export type Role = 'superadmin' | 'owner' | 'tindera';
 
 export interface User {
   id: number;
   username: string;
   name: string;
   role: Role;
+  /** null for the super admin */
+  businessId: number | null;
+  businessName: string | null;
 }
 
-export interface StaffUser extends User {
+export interface Business {
+  id: number;
+  name: string;
+  active: boolean;
+  createdAt: string;
+  owners: string;
+  tinderaCount: number;
+  txnCount: number;
+}
+
+export interface StaffUser extends Omit<User, 'businessId' | 'businessName'> {
   active: boolean;
   createdAt: string;
   txnCount: number;
@@ -27,6 +40,7 @@ export interface Txn {
   note: string;
   createdBy: number;
   createdByName: string;
+  businessId: number;
   updatedAt: string;
   hasImage: boolean;
   rawText?: string;
@@ -49,6 +63,8 @@ export interface TxnPayload {
   rawText: string;
   /** New image; null removes it; omit to keep the current one. */
   image?: { mime: string; base64: string } | null;
+  /** Super admin only: business to record into. */
+  businessId?: number;
 }
 
 export class ApiError extends Error {
@@ -91,13 +107,22 @@ export const api = {
   logout: () => request<{ ok: true }>('POST', 'logout'),
   changePassword: (current: string, next: string) => request<{ ok: true }>('POST', 'password', { current, next }),
 
-  users: () => request<{ users: StaffUser[] }>('GET', 'users'),
-  addUser: (b: { name: string; username: string; password: string }) => request<{ user: StaffUser }>('POST', 'users', b),
+  businesses: () => request<{ businesses: Business[] }>('GET', 'businesses'),
+  addBusiness: (b: { name: string; ownerName: string; ownerUsername: string; ownerPassword: string }) =>
+    request<{ business: { id: number; name: string } }>('POST', 'businesses', b),
+  updateBusiness: (id: number, b: { name?: string; active?: boolean }) => request<{ ok: true }>('PATCH', `businesses/${id}`, b),
+
+  /** businessId is required for the super admin and ignored for everyone else. */
+  users: (businessId?: number | null) =>
+    request<{ users: StaffUser[] }>('GET', `users${businessId ? `?businessId=${businessId}` : ''}`),
+  addUser: (b: { name: string; username: string; password: string; role?: 'owner' | 'tindera'; businessId?: number | null }) =>
+    request<{ user: StaffUser }>('POST', 'users', b),
   updateUser: (id: number, b: { name?: string; password?: string; active?: boolean }) =>
     request<{ ok: true }>('PATCH', `users/${id}`, b),
 
-  transactions: (q: { month?: string; search?: string; userId?: number | null }) => {
+  transactions: (q: { month?: string; search?: string; userId?: number | null; businessId?: number | null }) => {
     const p = new URLSearchParams();
+    if (q.businessId) p.set('businessId', String(q.businessId));
     if (q.month) p.set('month', q.month);
     if (q.search) p.set('search', q.search);
     if (q.userId) p.set('userId', String(q.userId));
@@ -107,10 +132,10 @@ export const api = {
   addTransaction: (b: TxnPayload) => request<{ id: number }>('POST', 'transactions', b),
   updateTransaction: (id: number, b: TxnPayload) => request<{ ok: true }>('PUT', `transactions/${id}`, b),
   deleteTransaction: (id: number) => request<{ ok: true }>('DELETE', `transactions/${id}`),
-  checkRef: (ref: string, excludeId?: number) =>
+  checkRef: (ref: string, excludeId?: number, businessId?: number | null) =>
     request<{ duplicate: { refNo: string; txnDate: string; recipient: string; type: string; createdByName: string } | null }>(
       'GET',
-      `check-ref?ref=${encodeURIComponent(ref)}&excludeId=${excludeId ?? 0}`,
+      `check-ref?ref=${encodeURIComponent(ref)}&excludeId=${excludeId ?? 0}${businessId ? `&businessId=${businessId}` : ''}`,
     ),
 };
 

@@ -5,10 +5,20 @@ import {
   destroySession,
   endSessionsForUser,
   hashPassword,
+  USER_COLUMNS,
   verifyPassword,
+  type Role,
   type User,
 } from './auth.js';
 import { query } from './db.js';
+
+/*
+ * Roles
+ *  - superadmin: manages businesses and their owners/tinderas; can view any business.
+ *  - owner:      manages one business: its tinderas and all of its transactions.
+ *  - tindera:    records transactions for her business; sees/edits only her own.
+ * Every transaction query is scoped to one business.
+ */
 
 class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -32,10 +42,26 @@ function requireUser(user: User | null): User {
   return user;
 }
 
-function requireOwner(user: User | null): User {
+const isManager = (u: User) => u.role === 'owner' || u.role === 'superadmin';
+
+function requireManager(user: User | null): User {
   const u = requireUser(user);
-  if (u.role !== 'owner') throw new HttpError(403, 'Only the owner can do this.');
+  if (!isManager(u)) throw new HttpError(403, 'Only the owner can do this.');
   return u;
+}
+
+function requireSuperadmin(user: User | null): User {
+  const u = requireUser(user);
+  if (u.role !== 'superadmin') throw new HttpError(403, 'Only the super admin can do this.');
+  return u;
+}
+
+/** The business this request acts on. The super admin must say which one; everyone else uses their own. */
+function businessScope(me: User, requested: unknown): number {
+  if (me.role !== 'superadmin') return me.businessId as number;
+  const id = Number(requested);
+  if (!Number.isInteger(id) || id <= 0) throw new HttpError(400, 'Choose a business first.');
+  return id;
 }
 
 const USERNAME = /^[a-z0-9._-]{3,30}$/;
@@ -53,10 +79,20 @@ function cleanPassword(v: unknown) {
   return p;
 }
 
-function cleanName(v: unknown) {
+function cleanName(v: unknown, what = 'a name') {
   const n = String(v ?? '').trim();
-  if (!n || n.length > 60) throw new HttpError(400, 'Please enter a name (up to 60 characters).');
+  if (!n || n.length > 80) throw new HttpError(400, `Please enter ${what} (up to 80 characters).`);
   return n;
+}
+
+async function assertUsernameFree(username: string) {
+  const exists = await query(`SELECT 1 FROM users WHERE username = $1`, [username]);
+  if (exists.length) throw new HttpError(409, `Username "${username}" is already taken.`);
+}
+
+async function assertBusinessExists(id: number) {
+  const rows = await query(`SELECT 1 FROM businesses WHERE id = $1`, [id]);
+  if (!rows.length) throw new HttpError(404, 'Business not found.');
 }
 
 // ---------- transactions ----------
@@ -72,6 +108,8 @@ interface TxnBody {
   rawText?: string;
   /** New image as base64; null removes the image; omitted keeps the current one. */
   image?: { mime: string; base64: string } | null;
+  /** Super admin only: which business to record into. */
+  businessId?: number;
 }
 
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
@@ -104,17 +142,22 @@ function cleanImage(img: TxnBody['image']) {
 
 const TXN_COLUMNS = `t.id, t.type, t.amount::float8 AS amount, t.ref_no AS "refNo", t.recipient, t.phone,
   t.txn_date AS "txnDate", t.note, t.created_by AS "createdBy", u.name AS "createdByName",
-  t.updated_at AS "updatedAt", (i.txn_id IS NOT NULL) AS "hasImage"`;
+  t.business_id AS "businessId", t.updated_at AS "updatedAt", (i.txn_id IS NOT NULL) AS "hasImage"`;
 const TXN_FROM = `FROM transactions t JOIN users u ON u.id = t.created_by LEFT JOIN receipt_images i ON i.txn_id = t.id`;
 
-async function loadTxn(id: number, user: User) {
-  const rows = await query<Record<string, unknown> & { createdBy: number }>(
+/** Loads a transaction the user is allowed to see, or throws 404/403. */
+async function loadTxn(id: number, me: User) {
+  const rows = await query<Record<string, unknown> & { createdBy: number; businessId: number }>(
     `SELECT ${TXN_COLUMNS}, t.raw_text AS "rawText" ${TXN_FROM} WHERE t.id = $1`,
     [id],
   );
   const t = rows[0];
   if (!t) throw new HttpError(404, 'Transaction not found.');
-  if (user.role !== 'owner' && t.createdBy !== user.id) throw new HttpError(403, 'You can only open your own transactions.');
+  if (me.role !== 'superadmin') {
+    // Other businesses' records look like they don't exist.
+    if (t.businessId !== me.businessId) throw new HttpError(404, 'Transaction not found.');
+    if (me.role === 'tindera' && t.createdBy !== me.id) throw new HttpError(403, 'You can only open your own transactions.');
+  }
   return t;
 }
 
@@ -152,10 +195,12 @@ async function route(req: Request): Promise<Response> {
   const m = req.method;
   const user = await currentUser(req);
 
-  // --- session / setup ---
+  // ---------- session / setup ----------
   if (path === 'session' && m === 'GET') {
-    const [{ count }] = await query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM users`);
-    return json({ user, needsSetup: count === 0 });
+    const [r] = await query<{ superadmins: number }>(
+      `SELECT COUNT(*) FILTER (WHERE role = 'superadmin')::int AS superadmins FROM users`,
+    );
+    return json({ user, needsSetup: r.superadmins === 0 });
   }
 
   if (path === 'setup' && m === 'POST') {
@@ -163,28 +208,32 @@ async function route(req: Request): Promise<Response> {
     const code = process.env.SETUP_CODE;
     if (!code) throw new HttpError(400, 'SETUP_CODE is not set on the server. Add it in Vercel → Settings → Environment Variables, then redeploy.');
     if (b.setupCode !== code) throw new HttpError(403, 'Wrong setup code.');
-    const [{ count }] = await query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM users`);
-    if (count > 0) throw new HttpError(409, 'The owner account already exists. Please log in.');
-    const [u] = await query<User>(
-      `INSERT INTO users (username, name, password_hash, role) VALUES ($1, $2, $3, 'owner')
-       RETURNING id, username, name, role`,
-      [cleanUsername(b.username), cleanName(b.name), await hashPassword(cleanPassword(b.password))],
+    const [r] = await query<{ n: number }>(`SELECT COUNT(*)::int AS n FROM users WHERE role = 'superadmin'`);
+    if (r.n > 0) throw new HttpError(409, 'The super admin account already exists. Please log in.');
+    const username = cleanUsername(b.username);
+    await assertUsernameFree(username);
+    const [u] = await query<{ id: number }>(
+      `INSERT INTO users (username, name, password_hash, role) VALUES ($1, $2, $3, 'superadmin') RETURNING id`,
+      [username, cleanName(b.name), await hashPassword(cleanPassword(b.password))],
     );
-    return json({ user: u }, { headers: { 'Set-Cookie': await createSession(req, u.id) } });
+    const me: User = { id: u.id, username, name: cleanName(b.name), role: 'superadmin', businessId: null, businessName: null };
+    return json({ user: me }, { headers: { 'Set-Cookie': await createSession(req, u.id) } });
   }
 
   if (path === 'login' && m === 'POST') {
     const b = await body<{ username: string; password: string }>(req);
-    const rows = await query<User & { password_hash: string; active: boolean }>(
-      `SELECT id, username, name, role, password_hash, active FROM users WHERE username = $1`,
+    const rows = await query<User & { passwordHash: string; active: boolean; businessActive: boolean | null }>(
+      `SELECT ${USER_COLUMNS}, u.password_hash AS "passwordHash", u.active, b.active AS "businessActive"
+         FROM users u LEFT JOIN businesses b ON b.id = u.business_id WHERE u.username = $1`,
       [String(b.username ?? '').trim().toLowerCase()],
     );
     const u = rows[0];
-    const ok = u ? await verifyPassword(String(b.password ?? ''), u.password_hash) : false;
+    const ok = u ? await verifyPassword(String(b.password ?? ''), u.passwordHash) : false;
     if (!u || !ok) throw new HttpError(401, 'Wrong username or password.');
-    if (!u.active) throw new HttpError(403, 'This account is deactivated. Please ask the owner.');
-    const out: User = { id: u.id, username: u.username, name: u.name, role: u.role };
-    return json({ user: out }, { headers: { 'Set-Cookie': await createSession(req, u.id) } });
+    if (!u.active) throw new HttpError(403, 'This account is deactivated. Please ask your owner or admin.');
+    if (u.role !== 'superadmin' && !u.businessActive) throw new HttpError(403, 'This business is deactivated. Please contact the admin.');
+    const me: User = { id: u.id, username: u.username, name: u.name, role: u.role, businessId: u.businessId, businessName: u.businessName };
+    return json({ user: me }, { headers: { 'Set-Cookie': await createSession(req, u.id) } });
   }
 
   if (path === 'logout' && m === 'POST') {
@@ -200,63 +249,125 @@ async function route(req: Request): Promise<Response> {
     return json({ ok: true });
   }
 
-  // --- staff (owner only) ---
+  // ---------- businesses (super admin) ----------
+  if (path === 'businesses' && m === 'GET') {
+    requireSuperadmin(user);
+    const businesses = await query(
+      `SELECT bz.id, bz.name, bz.active, bz.created_at AS "createdAt",
+              COALESCE((SELECT string_agg(o.name, ', ' ORDER BY o.id) FROM users o
+                         WHERE o.business_id = bz.id AND o.role = 'owner'), '') AS "owners",
+              (SELECT COUNT(*)::int FROM users s WHERE s.business_id = bz.id AND s.role = 'tindera') AS "tinderaCount",
+              (SELECT COUNT(*)::int FROM transactions t WHERE t.business_id = bz.id) AS "txnCount"
+         FROM businesses bz ORDER BY bz.active DESC, bz.name`,
+    );
+    return json({ businesses });
+  }
+
+  if (path === 'businesses' && m === 'POST') {
+    requireSuperadmin(user);
+    const b = await body<{ name: string; ownerName: string; ownerUsername: string; ownerPassword: string }>(req);
+    const name = cleanName(b.name, 'the business name');
+    const ownerName = cleanName(b.ownerName, "the owner's name");
+    const username = cleanUsername(b.ownerUsername);
+    const password = cleanPassword(b.ownerPassword);
+    await assertUsernameFree(username);
+    const [bz] = await query<{ id: number }>(`INSERT INTO businesses (name) VALUES ($1) RETURNING id`, [name]);
+    await query(
+      `INSERT INTO users (username, name, password_hash, role, business_id) VALUES ($1, $2, $3, 'owner', $4)`,
+      [username, ownerName, await hashPassword(password), bz.id],
+    );
+    return json({ business: { id: bz.id, name } });
+  }
+
+  if (parts[0] === 'businesses' && parts.length === 2 && m === 'PATCH') {
+    requireSuperadmin(user);
+    const id = Number(parts[1]);
+    await assertBusinessExists(id);
+    const b = await body<{ name?: string; active?: boolean }>(req);
+    if (b.name !== undefined) await query(`UPDATE businesses SET name = $1 WHERE id = $2`, [cleanName(b.name, 'the business name'), id]);
+    if (b.active !== undefined) {
+      await query(`UPDATE businesses SET active = $1 WHERE id = $2`, [Boolean(b.active), id]);
+      if (!b.active) await query(`DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE business_id = $1)`, [id]);
+    }
+    return json({ ok: true });
+  }
+
+  // ---------- staff (owner: own business; super admin: any business) ----------
   if (path === 'users' && m === 'GET') {
-    requireOwner(user);
+    const me = requireManager(user);
+    const businessId = businessScope(me, url.searchParams.get('businessId'));
     const users = await query(
       `SELECT u.id, u.username, u.name, u.role, u.active, u.created_at AS "createdAt",
               COUNT(t.id)::int AS "txnCount"
          FROM users u LEFT JOIN transactions t ON t.created_by = u.id
-        GROUP BY u.id ORDER BY u.role DESC, u.name`,
+        WHERE u.business_id = $1
+        GROUP BY u.id ORDER BY (u.role = 'owner') DESC, u.name`,
+      [businessId],
     );
     return json({ users });
   }
 
   if (path === 'users' && m === 'POST') {
-    requireOwner(user);
-    const b = await body<{ name: string; username: string; password: string }>(req);
+    const me = requireManager(user);
+    const b = await body<{ name: string; username: string; password: string; role?: Role; businessId?: number }>(req);
+    const businessId = businessScope(me, b.businessId);
+    const role: Role = b.role ?? 'tindera';
+    if (role === 'superadmin') throw new HttpError(400, 'Invalid role.');
+    if (role === 'owner' && me.role !== 'superadmin') throw new HttpError(403, 'Only the super admin can add owners.');
+    await assertBusinessExists(businessId);
     const username = cleanUsername(b.username);
-    const exists = await query(`SELECT 1 FROM users WHERE username = $1`, [username]);
-    if (exists.length) throw new HttpError(409, `Username "${username}" is already taken.`);
+    await assertUsernameFree(username);
     const [u] = await query(
-      `INSERT INTO users (username, name, password_hash, role) VALUES ($1, $2, $3, 'tindera')
+      `INSERT INTO users (username, name, password_hash, role, business_id) VALUES ($1, $2, $3, $4, $5)
        RETURNING id, username, name, role, active`,
-      [username, cleanName(b.name), await hashPassword(cleanPassword(b.password))],
+      [username, cleanName(b.name), await hashPassword(cleanPassword(b.password)), role, businessId],
     );
     return json({ user: u });
   }
 
   if (parts[0] === 'users' && parts.length === 2 && m === 'PATCH') {
-    const owner = requireOwner(user);
+    const me = requireManager(user);
     const id = Number(parts[1]);
-    const b = await body<{ name?: string; password?: string; active?: boolean }>(req);
-    const [target] = await query<{ role: Role }>(`SELECT role FROM users WHERE id = $1`, [id]);
+    const [target] = await query<{ role: Role; businessId: number | null }>(
+      `SELECT role, business_id AS "businessId" FROM users WHERE id = $1`,
+      [id],
+    );
     if (!target) throw new HttpError(404, 'User not found.');
+    const self = id === me.id;
+    if (me.role === 'owner') {
+      if (target.businessId !== me.businessId) throw new HttpError(404, 'User not found.');
+      if (target.role !== 'tindera' && !self) throw new HttpError(403, 'Only the super admin can change other owners.');
+    } else if (target.role === 'superadmin' && !self) {
+      throw new HttpError(403, 'Not allowed.');
+    }
+    const b = await body<{ name?: string; password?: string; active?: boolean }>(req);
     if (b.name !== undefined) await query(`UPDATE users SET name = $1 WHERE id = $2`, [cleanName(b.name), id]);
     if (b.password !== undefined) {
       await query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [await hashPassword(cleanPassword(b.password)), id]);
-      if (id !== owner.id) await endSessionsForUser(id); // log the tindera out everywhere
+      if (!self) await endSessionsForUser(id); // log them out everywhere
     }
     if (b.active !== undefined) {
-      if (target.role === 'owner') throw new HttpError(400, 'The owner account cannot be deactivated.');
+      if (self) throw new HttpError(400, "You can't deactivate your own account.");
+      if (target.role === 'owner' && me.role !== 'superadmin') throw new HttpError(403, 'Only the super admin can deactivate owners.');
       await query(`UPDATE users SET active = $1 WHERE id = $2`, [Boolean(b.active), id]);
       if (!b.active) await endSessionsForUser(id);
     }
     return json({ ok: true });
   }
 
-  // --- transactions ---
+  // ---------- transactions ----------
   if (path === 'transactions' && m === 'GET') {
     const me = requireUser(user);
+    const businessId = businessScope(me, url.searchParams.get('businessId'));
     const month = url.searchParams.get('month') ?? ''; // "YYYY-MM" or "" for all
     const search = (url.searchParams.get('search') ?? '').trim();
-    const where: string[] = [];
-    const params: unknown[] = [];
+    const params: unknown[] = [businessId];
+    const where: string[] = ['t.business_id = $1'];
     const add = (sql: string, v: unknown) => {
       params.push(v);
       where.push(sql.replace('?', `$${params.length}`));
     };
-    if (me.role !== 'owner') add('t.created_by = ?', me.id);
+    if (me.role === 'tindera') add('t.created_by = ?', me.id);
     else if (url.searchParams.get('userId')) add('t.created_by = ?', Number(url.searchParams.get('userId')));
     if (/^\d{4}-\d{2}$/.test(month) && !search) add('substr(t.txn_date, 1, 7) = ?', month);
     if (search) {
@@ -264,7 +375,7 @@ async function route(req: Request): Promise<Response> {
       const p = `$${params.length}`;
       where.push(`(t.recipient ILIKE ${p} OR t.ref_no ILIKE ${p} OR t.note ILIKE ${p} OR t.type ILIKE ${p} OR t.phone ILIKE ${p} OR u.name ILIKE ${p})`);
     }
-    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const whereSql = `WHERE ${where.join(' AND ')}`;
     const items = await query(
       `SELECT ${TXN_COLUMNS} ${TXN_FROM} ${whereSql} ORDER BY t.txn_date DESC, t.id DESC LIMIT 1000`,
       params,
@@ -282,27 +393,29 @@ async function route(req: Request): Promise<Response> {
   if (path === 'transactions' && m === 'POST') {
     const me = requireUser(user);
     const b = await body<TxnBody>(req);
+    const businessId = businessScope(me, b.businessId);
     const t = cleanTxn(b);
     const img = cleanImage(b.image);
     const [row] = await query<{ id: number }>(
-      `INSERT INTO transactions (type, amount, ref_no, recipient, phone, txn_date, note, raw_text, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-      [t.type, t.amount, t.refNo, t.recipient, t.phone, t.txnDate, t.note, t.rawText, me.id],
+      `INSERT INTO transactions (type, amount, ref_no, recipient, phone, txn_date, note, raw_text, created_by, business_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+      [t.type, t.amount, t.refNo, t.recipient, t.phone, t.txnDate, t.note, t.rawText, me.id, businessId],
     );
     await saveImage(row.id, img);
     return json({ id: row.id });
   }
 
   if (path === 'check-ref' && m === 'GET') {
-    requireUser(user);
+    const me = requireUser(user);
+    const businessId = businessScope(me, url.searchParams.get('businessId'));
     const ref = (url.searchParams.get('ref') ?? '').replace(/\s+/g, '');
     const exclude = Number(url.searchParams.get('excludeId') ?? 0);
     if (!ref) return json({ duplicate: null });
     const rows = await query(
       `SELECT t.id, t.ref_no AS "refNo", t.txn_date AS "txnDate", t.recipient, t.type, u.name AS "createdByName"
          FROM transactions t JOIN users u ON u.id = t.created_by
-        WHERE t.ref_no = $1 AND t.id <> $2 LIMIT 1`,
-      [ref, exclude],
+        WHERE t.business_id = $1 AND t.ref_no = $2 AND t.id <> $3 LIMIT 1`,
+      [businessId, ref, exclude],
     );
     return json({ duplicate: rows[0] ?? null });
   }
@@ -340,7 +453,8 @@ async function route(req: Request): Promise<Response> {
     }
 
     if (parts.length === 2 && m === 'DELETE') {
-      requireOwner(me);
+      requireManager(me);
+      await loadTxn(id, me);
       await query(`DELETE FROM transactions WHERE id = $1`, [id]);
       return json({ ok: true });
     }
@@ -348,5 +462,3 @@ async function route(req: Request): Promise<Response> {
 
   throw new HttpError(404, 'Not found.');
 }
-
-type Role = User['role'];
