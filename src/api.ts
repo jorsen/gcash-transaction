@@ -163,6 +163,11 @@ export const api = {
   },
   addCashin: (b: { number: string; gcashName: string; amount?: string; note?: string; businessId?: number | null }) =>
     request<{ id: number }>('POST', 'cashin', b),
+  cashinLookup: (number: string, businessId?: number | null) =>
+    request<{ names: { name: string; at: string; source: string }[] }>(
+      'GET',
+      `cashin/lookup?number=${encodeURIComponent(number)}${businessId ? `&businessId=${businessId}` : ''}`,
+    ),
   updateCashin: (id: number, status: 'done' | 'cancelled') => request<{ ok: true }>('PATCH', `cashin/${id}`, { status }),
 
   checkRef: (ref: string, excludeId?: number, businessId?: number | null) =>

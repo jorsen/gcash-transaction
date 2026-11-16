@@ -5,6 +5,27 @@ import { peso } from './format';
 /** "09171234567" -> "0917 123 4567" */
 const prettyNumber = (n: string) => n.replace(/^(\d{4})(\d{3})(\d{4})$/, '$1 $2 $3');
 
+/** Keeps only digits, converts +63/63/9… to 09…, and caps at 11 digits. */
+function toMobileDigits(v: string) {
+  let d = v.replace(/\D/g, '');
+  if (d.startsWith('63')) d = '0' + d.slice(2);
+  else if (d.startsWith('9')) d = '0' + d;
+  return d.slice(0, 11);
+}
+
+/** Groups digits as they are typed: 0917 123 4567 */
+const formatMobile = (d: string) => [d.slice(0, 4), d.slice(4, 7), d.slice(7, 11)].filter(Boolean).join(' ');
+
+function mobileStatus(d: string): { ok: boolean; text: string } | null {
+  if (!d) return null;
+  if (!d.startsWith('09')) return { ok: false, text: 'Must start with 09' };
+  if (d.length < 11) {
+    const left = 11 - d.length;
+    return { ok: false, text: `${left} more digit${left === 1 ? '' : 's'} needed (${d.length}/11)` };
+  }
+  return { ok: true, text: 'Valid 11-digit mobile number' };
+}
+
 function timeAgo(iso: string) {
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
   if (mins < 1) return 'just now';
@@ -101,15 +122,49 @@ export function CashIn({
 
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
+  const digits = toMobileDigits(form.number);
+  const status = mobileStatus(digits);
+  const [knownNames, setKnownNames] = useState<string[]>([]);
+  const [autoFilled, setAutoFilled] = useState(false);
+
+  // When a complete number is entered, look up names this store used before for it.
+  useEffect(() => {
+    if (digits.length !== 11 || !digits.startsWith('09')) {
+      setKnownNames([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .cashinLookup(digits, businessId)
+      .then(({ names }) => {
+        if (cancelled) return;
+        const list = names.map((n) => n.name);
+        setKnownNames(list);
+        // Fill the name in if the tindera hasn't typed one yet.
+        if (list.length) {
+          setForm((f) => {
+            if (f.gcashName.trim()) return f;
+            setAutoFilled(true);
+            return { ...f, gcashName: list[0] };
+          });
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [digits, businessId]);
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setFormError('');
     setSentMsg('');
     setSending(true);
     try {
-      await api.addCashin({ ...form, businessId });
+      await api.addCashin({ ...form, number: digits, businessId });
       setSentMsg(`Sent to the owner: ${form.number} · ${form.gcashName.toUpperCase()}`);
       setForm({ number: '', gcashName: '', amount: '', note: '' });
+      setAutoFilled(false);
       load();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : String(err));
@@ -186,14 +241,32 @@ export function CashIn({
           <label className="field">
             <span className="label">Customer's GCash number</span>
             <input
-              className="input"
+              className={`input number-input ${status ? (status.ok ? 'valid' : 'invalid') : ''}`}
               type="tel"
-              inputMode="tel"
+              inputMode="numeric"
               placeholder="0917 123 4567"
               value={form.number}
-              onChange={(e) => set('number', e.target.value)}
+              maxLength={13}
+              autoComplete="off"
+              name="customer-gcash-number"
+              onChange={(e) => {
+                const next = formatMobile(toMobileDigits(e.target.value));
+                if (autoFilled && next !== form.number) {
+                  // A remembered name belongs to the old number; don't carry it over.
+                  setForm((f) => ({ ...f, number: next, gcashName: '' }));
+                  setAutoFilled(false);
+                } else {
+                  set('number', next);
+                }
+              }}
+              aria-invalid={status ? !status.ok : undefined}
               required
             />
+            {status && (
+              <span className={`number-status ${status.ok ? 'ok' : 'bad'}`}>
+                {status.ok ? '✓' : '✗'} {status.text}
+              </span>
+            )}
           </label>
           <label className="field">
             <span className="label">GCash name</span>
@@ -201,13 +274,39 @@ export function CashIn({
               className="input mono"
               placeholder="e.g. JU** DE* C."
               value={form.gcashName}
-              onChange={(e) => set('gcashName', e.target.value)}
+              onChange={(e) => {
+                setAutoFilled(false);
+                set('gcashName', e.target.value);
+              }}
               autoCapitalize="characters"
+              autoComplete="off"
               autoCorrect="off"
               spellCheck={false}
               required
             />
-            <span className="hint">Type it as GCash shows it. Hidden letters can be typed as *.</span>
+            {autoFilled ? (
+              <span className="hint known">Filled in from this customer's last transaction. Check it matches GCash.</span>
+            ) : (
+              <span className="hint">Type it as GCash shows it. Hidden letters can be typed as *.</span>
+            )}
+            {knownNames.some((n) => n !== form.gcashName) && (
+              <span className="known-names">
+                Used before:{' '}
+                {knownNames.map((n) => (
+                  <button
+                    type="button"
+                    key={n}
+                    className={`chip mono ${n === form.gcashName ? 'active' : ''}`}
+                    onClick={() => {
+                      set('gcashName', n);
+                      setAutoFilled(true);
+                    }}
+                  >
+                    {n.toUpperCase()}
+                  </button>
+                ))}
+              </span>
+            )}
           </label>
           <label className="field">
             <span className="label">Amount (₱)</span>
@@ -219,7 +318,7 @@ export function CashIn({
           </label>
           {formError && <div className="error">{formError}</div>}
           {sentMsg && <div className="success">✓ {sentMsg}</div>}
-          <button className="btn primary block" disabled={sending}>
+          <button className="btn primary block" disabled={sending || !status?.ok}>
             {sending ? 'Sending…' : 'Send to owner'}
           </button>
         </form>

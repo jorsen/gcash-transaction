@@ -523,6 +523,27 @@ async function route(req: Request): Promise<Response> {
     return json({ id: row.id });
   }
 
+  // Names this business has used before for a mobile number (from earlier cash-in requests and
+  // receipts). GCash has no public name-lookup API, so this is the store's own customer memory.
+  if (path === 'cashin/lookup' && m === 'GET') {
+    const me = requireUser(user);
+    const businessId = businessScope(me, url.searchParams.get('businessId'));
+    const number = cleanMobile(url.searchParams.get('number'));
+    const rows = await query<{ name: string; at: string; source: string }>(
+      `SELECT name, MAX(at) AS at, MIN(source) AS source FROM (
+         SELECT gcash_name AS name, created_at AS at, 'cash-in' AS source
+           FROM cashin_requests WHERE business_id = $1 AND number = $2 AND status <> 'cancelled'
+         UNION ALL
+         SELECT recipient, created_at, 'receipt'
+           FROM transactions
+          WHERE business_id = $1 AND recipient <> ''
+            AND right(regexp_replace(phone, '\\D', '', 'g'), 10) = right($2, 10)
+       ) x GROUP BY name ORDER BY MAX(at) DESC LIMIT 3`,
+      [businessId, number],
+    );
+    return json({ names: rows });
+  }
+
   if (parts[0] === 'cashin' && parts.length === 2 && m === 'PATCH') {
     const me = requireUser(user);
     const id = Number(parts[1]);

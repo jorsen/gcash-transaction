@@ -218,3 +218,13 @@ input.mono { text-transform: uppercase; }
 .status-pill.done { background: var(--green); color: #fff; }
 .status-pill.cancelled { background: var(--border); color: var(--muted); }
 .cashin-card:not(.pending) .cashin-amount { margin-right: 64px; }
+
+/* ---------- cash-in number status / remembered names ---------- */
+.number-input { font-size: 20px; letter-spacing: 0.06em; font-variant-numeric: tabular-nums; }
+.number-input.valid { border-color: var(--green); outline-color: var(--green); }
+.number-input.invalid { border-color: var(--red); outline-color: var(--red); }
+.number-status { font-size: 13px; font-weight: 600; }
+.number-status.ok { color: var(--green); }
+.number-status.bad { color: var(--red); }
+.hint.known { color: var(--blue); font-weight: 600; }
+.known-names { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
