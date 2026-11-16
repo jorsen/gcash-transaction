@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { TxnType } from '../../src/lib/parseGcash';
+import type { TxnType } from './parseGcash';
 
 export interface Txn {
   id: number;

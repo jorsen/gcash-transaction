@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { isIncoming, peso, prettyDate } from '../../src/lib/format';
+import { isIncoming, peso, prettyDate } from './format';
 import { exportBackup, exportCsv, importBackup } from './backup';
 import { listTxns, type Txn } from './db';
 import { Review } from './Review';

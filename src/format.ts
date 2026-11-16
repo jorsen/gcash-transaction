@@ -13,15 +13,3 @@ export function prettyDate(s: string) {
 }
 
 export const isIncoming = (type: string) => type === 'Received' || type === 'Cash In';
-
-export const theme = {
-  blue: '#007DFE',
-  blueDark: '#0057B8',
-  bg: '#F3F6FB',
-  card: '#FFFFFF',
-  text: '#14213D',
-  muted: '#6B7A90',
-  border: '#E1E7F0',
-  green: '#12A150',
-  red: '#D93636',
-};

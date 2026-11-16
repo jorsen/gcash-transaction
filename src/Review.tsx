@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
-import { prettyDate } from '../../src/lib/format';
-import { formatDateTime, parseGcashReceipt, TXN_TYPES, type TxnType } from '../../src/lib/parseGcash';
+import { prettyDate } from './format';
+import { formatDateTime, parseGcashReceipt, TXN_TYPES, type TxnType } from './parseGcash';
 import { BlobImage } from './BlobImage';
 import { addTxn, deleteTxn, findByRefNo, getTxn, updateTxn, type TxnInput } from './db';
 import { compressForStorage } from './image';

@@ -7,7 +7,6 @@ export default defineConfig({
   base: './',
   server: {
     host: true, // reachable from a phone on the same Wi-Fi during development
-    fs: { allow: ['..'] }, // the receipt parser is shared with the native app in ../src/lib
   },
   plugins: [
     react(),
