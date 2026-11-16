@@ -23,6 +23,8 @@ export interface Business {
 }
 
 export interface StaffUser extends Omit<User, 'businessId' | 'businessName'> {
+  /** Devices with notifications turned on. */
+  pushDevices: number;
   active: boolean;
   createdAt: string;
   txnCount: number;
@@ -153,7 +155,7 @@ export const api = {
   pushKey: () => request<{ publicKey: string }>('GET', 'push/key'),
   pushSubscribe: (sub: PushSubscriptionJSON) => request<{ ok: true }>('POST', 'push/subscribe', sub),
   pushUnsubscribe: (endpoint: string) => request<{ ok: true }>('POST', 'push/unsubscribe', { endpoint }),
-  pushTest: () => request<{ ok: true }>('POST', 'push/test'),
+  pushTest: (delaySeconds = 0) => request<{ ok: true; devices: number }>('POST', `push/test?delay=${delaySeconds}`),
 
   cashin: (q: { businessId?: number | null; pendingOnly?: boolean }) => {
     const p = new URLSearchParams();

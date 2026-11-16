@@ -312,7 +312,8 @@ async function route(req: Request): Promise<Response> {
     const businessId = businessScope(me, url.searchParams.get('businessId'));
     const users = await query(
       `SELECT u.id, u.username, u.name, u.role, u.active, u.created_at AS "createdAt",
-              COUNT(t.id)::int AS "txnCount"
+              COUNT(t.id)::int AS "txnCount",
+              (SELECT COUNT(*)::int FROM push_subscriptions p WHERE p.user_id = u.id) AS "pushDevices"
          FROM users u LEFT JOIN transactions t ON t.created_by = u.id
         WHERE u.business_id = $1
         GROUP BY u.id ORDER BY (u.role = 'owner') DESC, u.name`,
@@ -453,12 +454,25 @@ async function route(req: Request): Promise<Response> {
 
   if (path === 'push/test' && m === 'POST') {
     const me = requireUser(user);
+    // Optional delay (max 20 s) so the user can close the app first and check that
+    // notifications arrive while it's closed. The function keeps running if the app closes.
+    const delay = Math.min(20, Math.max(0, Number(url.searchParams.get('delay') ?? 0) || 0));
+    if (delay) await new Promise((r) => setTimeout(r, delay * 1000));
+    const [{ devices }] = await query<{ devices: number }>(
+      `SELECT COUNT(*)::int AS devices FROM push_subscriptions WHERE user_id = $1`,
+      [me.id],
+    );
     await notifyUsers(
       [me.id],
-      { title: 'Notifications are on ✓', body: 'You will be notified about new receipts and cash-in requests.', url: '/', tag: 'test' },
+      {
+        title: 'Test notification ✓',
+        body: delay ? 'Notifications reach you even when the app is closed.' : 'Notifications are on for this device.',
+        url: '/',
+        tag: 'test',
+      },
       url.origin,
     );
-    return json({ ok: true });
+    return json({ ok: true, devices });
   }
 
   // ---------- cash-in requests ----------
@@ -518,6 +532,7 @@ async function route(req: Request): Promise<Response> {
         body: `${prettyNumber(number)} · ${gcashName} — from ${me.name}`,
         url: '/?view=cashin',
         tag: `cashin-${row.id}`,
+        sticky: true,
       },
       url.origin,
     );

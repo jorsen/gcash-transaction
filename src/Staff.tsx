@@ -133,6 +133,11 @@ export function Staff({
                 <span className="row-sub">
                   @{u.username} · {u.txnCount} transaction{u.txnCount === 1 ? '' : 's'}
                 </span>
+                <span className={`push-pill ${u.pushDevices > 0 ? 'on' : 'off'}`}>
+                  {u.pushDevices > 0
+                    ? `🔔 Notifications on${u.pushDevices > 1 ? ` · ${u.pushDevices} devices` : ''}`
+                    : '🔕 Notifications off'}
+                </span>
               </div>
               </div>
               {canManage(u) && (

@@ -40,7 +40,7 @@ export async function enablePush(): Promise<PushState> {
     sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
   }
   await api.pushSubscribe(sub.toJSON());
-  await api.pushTest().catch(() => undefined);
+  await api.pushTest(0).catch(() => undefined);
   return 'on';
 }
 
@@ -52,6 +52,33 @@ export async function disablePush(): Promise<PushState> {
     await sub.unsubscribe();
   }
   return 'off';
+}
+
+/**
+ * Called every time the app opens. If notifications are allowed, makes sure this device still has a
+ * push subscription (re-creating it if the browser dropped it) and that the server has it, so pushes
+ * keep arriving while the app is closed. Returns the resulting state.
+ */
+export async function ensurePushSubscription(): Promise<PushState> {
+  const state = await getPushState();
+  if (state === 'unsupported' || state === 'needs-install' || state === 'denied') return state;
+  if (Notification.permission !== 'granted') return 'off';
+  try {
+    // ready never resolves if the service worker is not running (e.g. dev mode), so don't wait forever.
+    const reg = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("no service worker")), 8000)),
+    ]);
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { publicKey } = await api.pushKey();
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+    }
+    await api.pushSubscribe(sub.toJSON());
+    return 'on';
+  } catch {
+    return state;
+  }
 }
 
 /** Re-sends this device's subscription after login, so it's linked to whoever is logged in now. */

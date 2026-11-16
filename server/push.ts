@@ -13,6 +13,8 @@ export interface PushPayload {
   url: string;
   /** Notifications with the same tag replace each other instead of stacking. */
   tag?: string;
+  /** Keep the notification on screen until it is tapped or dismissed (e.g. cash-in requests). */
+  sticky?: boolean;
 }
 
 let keys: Promise<{ publicKey: string; privateKey: string }> | null = null;
@@ -75,7 +77,8 @@ export async function notifyUsers(userIds: number[], payload: PushPayload, origi
       subs.map((s) =>
         sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body, {
           vapidDetails: { subject: origin.startsWith('https:') ? origin : 'mailto:admin@example.com', publicKey: pub, privateKey },
-          TTL: 6 * 3600,
+          // If the phone is off or offline, the push service keeps the message for up to 24 h.
+          TTL: 24 * 3600,
           urgency: 'high',
           timeout: 5000,
         }).catch(async (e) => {

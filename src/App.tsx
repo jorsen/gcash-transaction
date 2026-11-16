@@ -7,7 +7,7 @@ import { countLocal } from './db';
 import { isIncoming, peso } from './format';
 import { useLiveStamp } from './live';
 import { Login } from './Login';
-import { disablePush, enablePush, getPushState, syncPushSubscription, unlinkPushSubscription, type PushState } from './push';
+import { disablePush, enablePush, ensurePushSubscription, syncPushSubscription, unlinkPushSubscription, type PushState } from './push';
 import { Review } from './Review';
 import { Staff } from './Staff';
 import { ActionSheet, Avatar, Banner, Icon, SkeletonRows, useUi } from './ui';
@@ -239,7 +239,9 @@ function Home({
   }, []);
 
   useEffect(() => {
-    if (!isSuper) getPushState().then(setPushState).catch(() => setPushState('unsupported'));
+    // Re-register this device for push every time the app opens, so notifications keep
+    // arriving while the app is closed even if the browser dropped the old subscription.
+    if (!isSuper) ensurePushSubscription().then(setPushState).catch(() => setPushState('unsupported'));
   }, [isSuper]);
 
   /** silent: refresh in the background without the loading skeleton (realtime updates). */
@@ -305,6 +307,44 @@ function Home({
     } finally {
       setPushBusy(false);
     }
+  };
+
+  const notificationHelp = () =>
+    ui.info({
+      title: 'Getting notifications when the app is closed',
+      message: (
+        <div className="help-list">
+          <p>
+            <strong>Android (Chrome):</strong> Settings → Apps → Chrome → Battery → <em>Unrestricted</em> (Xiaomi: <em>No restrictions</em>;
+            Oppo/Realme/Vivo: allow <em>background activity</em> and <em>auto-launch</em>). Also make sure Chrome notifications are allowed.
+          </p>
+          <p>
+            <strong>iPhone:</strong> open GCash Tracker from its Home Screen icon (not Safari). Settings → Notifications → GCash Tracker →
+            Allow.
+          </p>
+          <p>
+            <strong>Windows PC:</strong> Chrome/Edge settings → System → turn on <em>Continue running background apps when closed</em>. Turn off
+            Focus Assist / Do Not Disturb.
+          </p>
+          <p>Notifications wait up to 24 hours if the phone is off or offline.</p>
+        </div>
+      ),
+      confirmText: 'Got it',
+    });
+
+  const testNotification = () => {
+    // Fire and forget: the server waits 10 s and then sends, even if the app is closed meanwhile.
+    api.pushTest(10).catch(() => undefined);
+    ui.info({
+      title: 'Close the app now',
+      message: (
+        <>
+          A test notification will arrive in about <strong>10 seconds</strong>. Close the app (or switch to another app) to check that
+          notifications reach you while it's closed. If nothing arrives, tap <em>Notification help</em> in the menu.
+        </>
+      ),
+      confirmText: 'OK',
+    });
   };
 
   const onPick = (e: ChangeEvent<HTMLInputElement>) => {
@@ -570,9 +610,13 @@ function Home({
             ...(isOwner
               ? [{ icon: 'download' as const, label: 'Export to Excel', hint: `CSV of ${search ? 'these search results' : monthLabel(month)}`, onClick: () => exportCsv(items, search ? 'search' : month) }]
               : []),
+            ...(pushState === 'on'
+              ? [{ icon: 'bell' as const, label: 'Send test notification', hint: 'Arrives in 10 s — close the app to check', onClick: testNotification }]
+              : []),
             ...(pushState && pushState !== 'unsupported' && pushState !== 'needs-install' && pushState !== 'denied'
               ? [{ icon: 'bell' as const, label: pushState === 'on' ? 'Turn off notifications' : 'Turn on notifications', onClick: togglePush }]
               : []),
+            ...(!isSuper ? [{ icon: 'bell' as const, label: 'Notification help', hint: 'If notifications don’t arrive when the app is closed', onClick: notificationHelp }] : []),
             ...(!isSuper
               ? [
                   { icon: 'key' as const, label: 'Change password', onClick: onChangePassword },
