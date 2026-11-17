@@ -46,6 +46,11 @@ export interface Txn {
   updatedAt: string;
   hasImage: boolean;
   rawText?: string;
+  /** From the cash-in / cash-out request this receipt completed ('' if none): the name the tindera typed. */
+  requestedName: string;
+  requestedNumber: string;
+  /** Tindera who sent that request. */
+  requestedByName: string;
 }
 
 export interface Summary {

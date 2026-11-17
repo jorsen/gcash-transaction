@@ -168,8 +168,13 @@ function cleanImage(img: TxnBody['image']) {
 
 const TXN_COLUMNS = `t.id, t.type, t.amount::float8 AS amount, t.ref_no AS "refNo", t.recipient, t.phone,
   t.txn_date AS "txnDate", t.note, t.created_by AS "createdBy", u.name AS "createdByName",
-  t.business_id AS "businessId", t.updated_at AS "updatedAt", (i.txn_id IS NOT NULL) AS "hasImage"`;
-const TXN_FROM = `FROM transactions t JOIN users u ON u.id = t.created_by LEFT JOIN receipt_images i ON i.txn_id = t.id`;
+  t.business_id AS "businessId", t.updated_at AS "updatedAt", (i.txn_id IS NOT NULL) AS "hasImage",
+  COALESCE(rq.gcash_name, '') AS "requestedName", COALESCE(rq.number, '') AS "requestedNumber",
+  COALESCE(ru.name, '') AS "requestedByName"`;
+// rq: the cash-in / cash-out request this receipt completed (if any): the name the tindera typed, and who asked.
+const TXN_FROM = `FROM transactions t JOIN users u ON u.id = t.created_by LEFT JOIN receipt_images i ON i.txn_id = t.id
+  LEFT JOIN LATERAL (SELECT c.gcash_name, c.number, c.created_by FROM cashin_requests c WHERE c.txn_id = t.id ORDER BY c.id LIMIT 1) rq ON TRUE
+  LEFT JOIN users ru ON ru.id = rq.created_by`;
 
 /** Loads a transaction the user is allowed to see, or throws 404/403. */
 async function loadTxn(id: number, me: User, opts: { forEdit?: boolean } = {}) {

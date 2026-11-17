@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { api, blobToPayload, imageUrl, type TxnPayload, type User } from './api';
 import { BlobImage } from './BlobImage';
+import { MaskedName } from './CashIn';
 import { peso, prettyDate } from './format';
 import { markLocalAction } from './sound';
 import { Icon, useUi } from './ui';
@@ -53,6 +54,8 @@ export function Review({
   /** URL of the image already stored in the cloud (when editing). */
   const [savedImageUrl, setSavedImageUrl] = useState<string | null>(null);
   const [createdByName, setCreatedByName] = useState('');
+  // The cash-in / cash-out request this receipt completed: the name the tindera typed, so it can be compared.
+  const [requested, setRequested] = useState<{ name: string; number: string; by: string } | null>(null);
   /** A tindera viewing the GCash receipt the owner attached to her request: look, don't edit. */
   const [readOnly, setReadOnly] = useState(false);
   const [rawText, setRawText] = useState('');
@@ -120,6 +123,7 @@ export function Review({
           setSavedImageUrl(t.hasImage ? imageUrl(t) : null);
           setRawText(t.rawText ?? '');
           setCreatedByName(t.createdByName);
+          setRequested(t.requestedName || t.requestedNumber ? { name: t.requestedName, number: t.requestedNumber, by: t.requestedByName } : null);
           setReadOnly(user.role === 'tindera' && t.createdBy !== user.id);
           setForm({
             type: t.type,
@@ -312,6 +316,13 @@ export function Review({
             </Field>
             <Field label="Name / Merchant">
               <input className="input" placeholder="e.g. JU•• DE•A C." value={form.recipient} onChange={(e) => set('recipient', e.target.value)} />
+              {requested && (
+                <span className="requested-name">
+                  Requested{requested.by ? ` by ${requested.by}` : ''}:{' '}
+                  {requested.name ? <MaskedName name={requested.name.toUpperCase()} className="masked-name" /> : null}
+                  {requested.number ? <span className="requested-number"> · {requested.number.replace(/^(\d{4})(\d{3})(\d{4})$/, '$1 $2 $3')}</span> : null}
+                </span>
+              )}
             </Field>
             <Field label="Mobile number">
               <input className="input" type="tel" placeholder="+63 9XX XXX XXXX" value={form.phone} onChange={(e) => set('phone', e.target.value)} />

@@ -511,3 +511,9 @@ button.activity-row:active { transform: scale(0.99); }
 .camera-video { max-width: 100%; max-height: calc(100dvh - 190px); border-radius: 12px; background: #000; }
 .camera-stage .spinner { position: absolute; }
 .camera-error { max-width: 340px; text-align: center; line-height: 1.5; color: rgba(255, 255, 255, 0.85); }
+
+/* Name the tindera typed in the request, shown with the receipt it completed. */
+.requested-name { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.requested-name .masked-name { color: var(--text); font-weight: 700; }
+.row-requested { display: block; font-size: 12px; color: var(--muted); }
+.row-requested .masked-name { font-weight: 700; color: var(--text); font-size: 12px; }
