@@ -101,6 +101,9 @@ function openGcashApp(onFail: () => void) {
   return true;
 }
 
+/** The last + menu choice already handled (kept outside the component so it survives remounts). */
+let handledRequestNonce = 0;
+
 /** Details read from a customer's cash-out / payment receipt (not editable). */
 interface Scanned {
   source: 'gcash' | 'bank';
@@ -209,7 +212,9 @@ export function CashIn({
   };
   // Tindera picked Cash in / Cash out / Payment from the + menu.
   useEffect(() => {
-    if (!startRequest) return;
+    // Each + choice is handled once (this screen remounts when switching tabs; don't reopen the camera then).
+    if (!startRequest || startRequest.nonce === handledRequestNonce) return;
+    handledRequestNonce = startRequest.nonce;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing from the + menu choice
     setKind(startRequest.kind);
     setFormOpen(true);
