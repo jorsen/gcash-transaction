@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, blobToPayload, type CashinRequest, type User } from './api';
+import { api, blobToPayload, KIND_INFO, type CashinRequest, type User } from './api';
 import { BlobImage } from './BlobImage';
 import { MaskedName } from './CashIn';
 import { peso } from './format';
@@ -108,8 +108,18 @@ export function AttachReceipt({
     try {
       markLocalAction();
       const small = await compressForStorage(file).catch(() => file);
-      const type: TxnType =
-        parsed && parsed.type !== 'Other' ? parsed.type : req?.kind === 'cashout' ? 'Received' : 'Cash In';
+      // The request decides the type (so totals stay right even if the receipt text reads differently).
+      const type: TxnType = req
+        ? req.kind === 'cashin'
+          ? 'Cash In'
+          : req.kind === 'payment'
+            ? 'Payment'
+            : parsed?.type === 'Cash Out'
+              ? 'Cash Out'
+              : 'Received'
+        : parsed && parsed.type !== 'Other'
+          ? parsed.type
+          : 'Cash In';
       const { id: txnId } = await api.addTransaction({
         type,
         amount,
@@ -117,7 +127,7 @@ export function AttachReceipt({
         recipient: parsed?.recipient || req?.gcashName || '',
         phone: parsed?.phone || req?.number || '',
         txnDate: parsed?.txnDate || formatDateTime(new Date()),
-        note: req ? `${req.kind === 'cashout' ? 'Cash-out' : 'Cash-in'} request from ${req.createdByName}${req.note ? ` · ${req.note}` : ''}` : '',
+        note: req ? `${KIND_INFO[req.kind].label} request from ${req.createdByName}${req.note ? ` · ${req.note}` : ''}` : '',
         rawText,
         image: await blobToPayload(small),
         ...(businessId ? { businessId } : {}),
@@ -125,7 +135,7 @@ export function AttachReceipt({
       if (req) {
         await api.updateCashin(req.id, 'done', txnId);
         playChime('done', false);
-        ui.toast(`${req.kind === 'cashout' ? 'Cash-out received' : 'Cash-in sent'} · receipt attached`);
+        ui.toast(`${req.kind === 'cashin' ? 'Cash-in sent' : `${KIND_INFO[req.kind].label} received`} · receipt attached`);
       } else {
         ui.toast('Receipt saved');
       }
@@ -136,7 +146,7 @@ export function AttachReceipt({
     }
   };
 
-  const doneLabel = chosen?.kind === 'cashout' ? 'Attach & mark received' : 'Attach & mark sent';
+  const doneLabel = chosen && chosen.kind !== 'cashin' ? 'Attach & mark received' : 'Attach & mark sent';
 
   return (
     <div className="page has-sticky-actions">
@@ -204,7 +214,7 @@ export function AttachReceipt({
                   <span className={`radio ${chosenId === r.id ? 'on' : ''}`} />
                   <span className="row-main">
                     <span className="pick-top">
-                      <span className={`kind-badge ${r.kind}`}>{r.kind === 'cashout' ? 'Cash out' : 'Cash in'}</span>
+                      <span className={`kind-badge ${r.kind}`}>{KIND_INFO[r.kind].label}</span>
                       <strong className="pick-number">{prettyNumber(r.number)}</strong>
                     </span>
                     {r.gcashName && <MaskedName name={r.gcashName} className="masked-name small" />}

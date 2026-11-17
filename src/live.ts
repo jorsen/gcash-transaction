@@ -8,8 +8,8 @@ export interface LiveStamp {
   cashin: string;
   /** Number of cash-in requests waiting. */
   pending: number;
-  /** Kind of the newest waiting request ("cashin" / "cashout"). */
-  latestKind: 'cashin' | 'cashout' | null;
+  /** Kind of the newest waiting request ("cashin" / "cashout" / "payment"). */
+  latestKind: 'cashin' | 'cashout' | 'payment' | null;
   /** "<time>|<kind>" of the newest reminder from a tindera. */
   lastRemind: string | null;
 }

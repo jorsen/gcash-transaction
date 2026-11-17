@@ -57,6 +57,10 @@ export interface Summary {
   count: number;
   inflow: number;
   outflow: number;
+  /** Totals per kind: Cash In receipts, Cash Out / Received, Payment. */
+  cashin: number;
+  cashout: number;
+  payment: number;
 }
 
 export interface TxnPayload {
@@ -74,7 +78,20 @@ export interface TxnPayload {
   businessId?: number;
 }
 
-export type RequestKind = 'cashin' | 'cashout';
+/**
+ * cashin: customer pays cash, the owner sends GCash to them.
+ * cashout: customer sends GCash to the store, the tindera gives them cash.
+ * payment: customer pays for goods by sending GCash to the store (no cash back).
+ */
+export type RequestKind = 'cashin' | 'cashout' | 'payment';
+
+/** Labels per request kind. "receives" = the store receives GCash (cash-out and payment). */
+export const KIND_INFO: Record<RequestKind, { label: string; shout: string; spoken: string; receives: boolean }> = {
+  cashin: { label: 'Cash in', shout: 'Ate, pa cash-in po!', spoken: 'Ate, pa cash in po!', receives: false },
+  cashout: { label: 'Cash out', shout: 'Ate, pa cash-out po!', spoken: 'Ate, pa cash out po!', receives: true },
+  payment: { label: 'Payment', shout: 'Ate, may bayad po!', spoken: 'Ate, may bayad po!', receives: true },
+};
+export const kindOf = (k: unknown): RequestKind => (k === 'cashout' || k === 'payment' ? k : 'cashin');
 
 export interface CashinRequest {
   id: number;

@@ -12,5 +12,5 @@ export function prettyDate(s: string) {
   return `${MONTHS[parseInt(m[2], 10) - 1]} ${parseInt(m[3], 10)}, ${m[1]}${time}`;
 }
 
-/** Money into the store's GCash: a customer's cash-out (they send GCash, get cash). */
-export const isIncoming = (type: string) => type === 'Received' || type === 'Cash Out';
+/** Money into the store's GCash: a customer's cash-out (they send GCash, get cash) or payment for items. */
+export const isIncoming = (type: string) => type === 'Received' || type === 'Cash Out' || type === 'Payment';

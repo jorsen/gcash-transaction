@@ -17,7 +17,7 @@ export interface PushPayload {
   sticky?: boolean;
   /** Lets an open app react instantly (chime + "Cash in po!") without waiting for its next check. */
   event?: 'request' | 'remind' | 'done';
-  kind?: 'cashin' | 'cashout';
+  kind?: 'cashin' | 'cashout' | 'payment';
 }
 
 let keys: Promise<{ publicKey: string; privateKey: string }> | null = null;

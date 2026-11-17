@@ -1,3 +1,4 @@
+import { KIND_INFO, type RequestKind } from './api';
 /**
  * In-app notification sounds, synthesized with Web Audio (no sound files to download).
  * Browsers only allow audio after the user has tapped the page once, so the audio engine is
@@ -159,10 +160,10 @@ export function recentlyAnnounced(ms = 2500) {
  * Request alert for the owner: chime, then "Cash in po!" / "Pa cash out po!".
  * A reminder from the tindera says it twice: "Pa cash in po! Pa cash in po!"
  */
-export function announceRequest(kind: 'cashin' | 'cashout', force = false, reminder = false) {
+export function announceRequest(kind: RequestKind, force = false, reminder = false) {
   lastAnnounced = Date.now();
   if (!force && !soundEnabled()) return;
   playChime('cashin', force);
-  const phrase = kind === 'cashout' ? 'Ate, pa cash out po!' : 'Ate, pa cash in po!';
+  const phrase = KIND_INFO[kind].spoken;
   setTimeout(() => say(reminder ? `${phrase} ${phrase}` : phrase, force), 650);
 }

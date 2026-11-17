@@ -171,8 +171,10 @@ textarea.input { resize: vertical; min-height: 80px; }
 .month-nav button:not(:disabled):active { background: rgba(255, 255, 255, 0.2); }
 .month-nav button:disabled { opacity: 0.3; }
 .month-label { font-weight: 700; font-size: 15px; }
-.summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 4px; }
+.summary-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 4px; }
+.summary-grid > div:nth-child(2) { text-align: center; }
 .summary-grid > div:last-child { text-align: right; }
+.summary-grid .summary-value { font-size: clamp(15px, 4.6vw, 22px); }
 .summary-sub { color: rgba(255, 255, 255, 0.75); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 .summary-value { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .summary-foot {
@@ -516,3 +518,14 @@ button.activity-row:active { transform: scale(0.99); }
 .type-tag { font-weight: 700; }
 .type-tag.cashin { color: var(--blue); }
 .type-tag.cashout { color: var(--green); }
+
+/* Payment requests (customer pays for items by GCash): purple. */
+.kind-badge.payment { background: #f1eaff; color: #7c3aed; }
+.cashin-card.kind-payment { border-left-color: #7c3aed; }
+.cashin-card.kind-payment .cashin-amount { color: #7c3aed; }
+.type-tag.payment { color: #7c3aed; }
+@media (prefers-color-scheme: dark) {
+  .kind-badge.payment { background: #2a1f45; color: #b794f6; }
+  .cashin-card.kind-payment .cashin-amount, .type-tag.payment { color: #b794f6; }
+}
+.cashin-card.done.kind-payment { border-left-color: var(--green); }

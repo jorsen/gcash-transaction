@@ -121,6 +121,19 @@ async function assertBusinessExists(id: number) {
   if (!rows.length) throw new HttpError(404, 'Business not found.');
 }
 
+/**
+ * Request kinds (all requested by a tindera, handled by the owner):
+ * - cashin: customer pays cash; the owner sends GCash to them.
+ * - cashout: customer sends GCash to the store; the tindera gives them cash.
+ * - payment: customer pays for goods by sending GCash to the store (no cash back).
+ */
+type Kind = 'cashin' | 'cashout' | 'payment';
+const KINDS: Record<Kind, { label: string; Label: string; shout: string }> = {
+  cashin: { label: 'cash-in', Label: 'Cash-in', shout: 'Ate, pa cash-in po!' },
+  cashout: { label: 'cash-out', Label: 'Cash-out', shout: 'Ate, pa cash-out po!' },
+  payment: { label: 'payment', Label: 'Payment', shout: 'Ate, may bayad po!' },
+};
+
 // ---------- transactions ----------
 
 interface TxnBody {
@@ -512,8 +525,11 @@ async function route(req: Request): Promise<Response> {
     );
     const [summary] = await query(
       `SELECT COUNT(*)::int AS count,
-              COALESCE(SUM(CASE WHEN t.type IN ('Received', 'Cash Out') THEN 0 ELSE t.amount END), 0)::float8 AS outflow,
-              COALESCE(SUM(CASE WHEN t.type IN ('Received', 'Cash Out') THEN t.amount ELSE 0 END), 0)::float8 AS inflow
+              COALESCE(SUM(CASE WHEN t.type IN ('Received', 'Cash Out', 'Payment') THEN 0 ELSE t.amount END), 0)::float8 AS outflow,
+              COALESCE(SUM(CASE WHEN t.type IN ('Received', 'Cash Out', 'Payment') THEN t.amount ELSE 0 END), 0)::float8 AS inflow,
+              COALESCE(SUM(CASE WHEN t.type IN ('Cash In', 'Send Money') THEN t.amount ELSE 0 END), 0)::float8 AS cashin,
+              COALESCE(SUM(CASE WHEN t.type IN ('Cash Out', 'Received') THEN t.amount ELSE 0 END), 0)::float8 AS cashout,
+              COALESCE(SUM(CASE WHEN t.type = 'Payment' THEN t.amount ELSE 0 END), 0)::float8 AS payment
          FROM transactions t JOIN users u ON u.id = t.created_by ${whereSql}`,
       params,
     );
@@ -681,8 +697,8 @@ async function route(req: Request): Promise<Response> {
       amount?: number | string | null;
       note?: string;
       businessId?: number;
-      kind?: 'cashin' | 'cashout';
-      /** Cash-out only: where the customer sends from — their GCash, or another bank via InstaPay/PESONet. */
+      kind?: Kind;
+      /** Cash-out / payment only: where the customer sends from — their GCash, or another bank via InstaPay/PESONet. */
       source?: 'gcash' | 'bank';
       bankName?: string;
       accountLast4?: string;
@@ -691,8 +707,8 @@ async function route(req: Request): Promise<Response> {
       proof?: { mime: string; base64: string } | null;
     }>(req);
     const businessId = businessScope(me, b.businessId);
-    const kind = b.kind === 'cashout' ? 'cashout' : 'cashin';
-    const source = kind === 'cashout' && b.source === 'bank' ? 'bank' : 'gcash';
+    const kind: Kind = b.kind === 'cashout' || b.kind === 'payment' ? b.kind : 'cashin';
+    const source = kind !== 'cashin' && b.source === 'bank' ? 'bank' : 'gcash';
     // Bank cash-outs have no GCash number (the money comes from a bank account).
     const number = source === 'bank' && !String(b.number ?? '').trim() ? '' : cleanMobile(b.number);
     const bankName = source === 'bank' ? String(b.bankName ?? '').trim().slice(0, 60) : '';
@@ -710,7 +726,7 @@ async function route(req: Request): Promise<Response> {
     const rawAmount = String(b.amount ?? '').replace(/,/g, '').trim();
     let amount = Number(rawAmount);
     if (!rawAmount || !Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) {
-      throw new HttpError(400, kind === 'cashout' ? 'Enter the amount the customer sent.' : 'Enter the amount to cash in.');
+      throw new HttpError(400, kind === 'cashin' ? 'Enter the amount to cash in.' : 'Enter the amount the customer sent.');
     }
     amount = Math.round(amount * 100) / 100;
     const note = String(b.note ?? '').trim().slice(0, 500);
@@ -725,7 +741,7 @@ async function route(req: Request): Promise<Response> {
     const who = describeRequest({ source, number, gcashName, bankName, accountLast4 });
     await logActivity(req, me, businessId, {
       action: 'cashin.create',
-      summary: `Sent a ${kind === 'cashout' ? (source === 'bank' ? 'bank cash-out' : 'cash-out') : 'cash-in'} request · ${who}${amount ? ` · ${peso(amount)}` : ''}${proof ? ' (with proof photo)' : ''}`,
+      summary: `Sent a ${source === 'bank' ? 'bank ' : ''}${KINDS[kind].label} request · ${who}${amount ? ` · ${peso(amount)}` : ''}${proof ? ' (with proof photo)' : ''}`,
       targetType: 'cashin',
       targetId: row.id,
     });
@@ -733,7 +749,7 @@ async function route(req: Request): Promise<Response> {
       businessId,
       me.id,
       {
-        title: `${kind === 'cashout' ? 'Ate, pa cash-out po!' : 'Ate, pa cash-in po!'}${amount ? ` · ${peso(amount)}` : ''}`,
+        title: `${KINDS[kind].shout}${amount ? ` · ${peso(amount)}` : ''}`,
         body: `${source === 'bank' ? 'InstaPay/bank · ' : ''}${who} — from ${me.name}`,
         url: '/?view=cashin',
         tag: `cashin-${row.id}`,
@@ -775,7 +791,7 @@ async function route(req: Request): Promise<Response> {
     const [r] = await query<{
       businessId: number;
       status: string;
-      kind: 'cashin' | 'cashout';
+      kind: Kind;
       number: string;
       gcashName: string;
       amount: number | null;
@@ -800,7 +816,7 @@ async function route(req: Request): Promise<Response> {
       targetType: 'cashin',
       targetId: id,
     });
-    const shout = r.kind === 'cashout' ? 'Ate, pa cash-out po!' : 'Ate, pa cash-in po!';
+    const shout = KINDS[r.kind].shout;
     await notifyOwners(
       r.businessId,
       me.id,
@@ -847,7 +863,7 @@ async function route(req: Request): Promise<Response> {
       number: string;
       gcashName: string;
       amount: number | null;
-      kind: 'cashin' | 'cashout';
+      kind: Kind;
       source: string;
       bankName: string;
       accountLast4: string;
@@ -892,14 +908,14 @@ async function route(req: Request): Promise<Response> {
       throw new HttpError(403, 'Only the owner can mark a cash-in as done.');
     }
     if (r.status !== 'pending' && r.status !== 'processing') throw new HttpError(409, `This request is already ${r.status}.`);
-    if (b.status === 'done' && r.kind === 'cashout' && txnId === null && r.amount !== null) {
-      // Cash-out confirmed received: save it as a "Received" transaction so it shows in receipts and
+    if (b.status === 'done' && r.kind !== 'cashin' && txnId === null && r.amount !== null) {
+      // Cash-out / payment confirmed received: save it as a "Received" / "Payment" transaction so it shows in receipts and
       // monthly totals, with the customer's proof photo (if any) as its image.
       const via = r.source === 'bank' ? `${r.bankName || 'bank'}${r.accountLast4 ? ` ••${r.accountLast4}` : ''} (InstaPay/bank)` : 'GCash';
       const [t] = await query<{ id: number }>(
         `INSERT INTO transactions (type, amount, ref_no, recipient, phone, txn_date, note, raw_text, created_by, business_id)
-         VALUES ('Received', $1, $2, $3, $4, $5, $6, '', $7, $8) RETURNING id`,
-        [r.amount, r.refNo, r.gcashName, r.number, phNow(), `Cash-out from ${via} · requested by ${r.createdByName}${r.note ? ` · ${r.note}` : ''}`, r.createdBy, r.businessId],
+         VALUES ($9, $1, $2, $3, $4, $5, $6, '', $7, $8) RETURNING id`,
+        [r.amount, r.refNo, r.gcashName, r.number, phNow(), `${r.kind === 'payment' ? 'Payment' : 'Cash-out'} from ${via} · requested by ${r.createdByName}${r.note ? ` · ${r.note}` : ''}`, r.createdBy, r.businessId, r.kind === 'payment' ? 'Payment' : 'Received'],
       );
       await query(
         `INSERT INTO receipt_images (txn_id, mime, data) SELECT $1, mime, data FROM request_proofs WHERE request_id = $2`,
@@ -912,26 +928,28 @@ async function route(req: Request): Promise<Response> {
       [b.status, me.id, id, txnId],
     );
     {
-      const label = r.kind === 'cashout' ? 'cash-out' : 'cash-in';
+      const label = KINDS[r.kind].label;
       await logActivity(req, me, r.businessId, {
         action: b.status === 'done' ? 'cashin.done' : 'cashin.cancel',
         summary:
           b.status === 'done'
-            ? `Marked a ${label} as ${r.kind === 'cashout' ? 'received' : 'sent'}${txnId ? ' (receipt attached)' : ''} · ${prettyNumber(r.number)}${r.amount ? ` · ${peso(r.amount)}` : ''}`
+            ? `Marked a ${label} as ${r.kind === 'cashin' ? 'sent' : 'received'}${txnId ? ' (receipt attached)' : ''} · ${prettyNumber(r.number)}${r.amount ? ` · ${peso(r.amount)}` : ''}`
             : `Cancelled a ${label} request · ${prettyNumber(r.number)}${r.amount ? ` · ${peso(r.amount)}` : ''}`,
         targetType: 'cashin',
         targetId: id,
       });
     }
     if (r.createdBy !== me.id) {
-      const label = r.kind === 'cashout' ? 'Cash-out' : 'Cash-in';
+      const label = KINDS[r.kind].Label;
       await notifyUsers(
         [r.createdBy],
         {
           title:
             b.status === 'cancelled'
               ? `${label} cancelled`
-              : r.kind === 'cashout'
+              : r.kind === 'payment'
+                ? `Payment received ✓${r.amount ? ` · ${peso(r.amount)}` : ''}`
+                : r.kind === 'cashout'
                 ? `Cash-out received ✓${r.amount ? ` — give ${peso(r.amount)} cash` : ''}`
                 : `Cash-in sent ✓${txnId ? ' · receipt attached' : ''}`,
           body: `${r.amount ? `${peso(r.amount)} · ` : ''}${prettyNumber(r.number)}${r.gcashName ? ` · ${r.gcashName}` : ''}`,

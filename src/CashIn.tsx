@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { api, blobToPayload, proofUrl, type CashinRequest, type RequestKind, type User } from './api';
+import { api, blobToPayload, KIND_INFO, proofUrl, type CashinRequest, type RequestKind, type User } from './api';
 import { BlobImage } from './BlobImage';
 import { CameraSheet } from './CameraSheet';
 import { CropSheet } from './CropSheet';
@@ -130,6 +130,7 @@ export function CashIn({
   liveStamp,
   onAttach,
   onViewReceipt,
+  startRequest,
 }: {
   user: User;
   /** Super admin: the business being viewed; null otherwise. */
@@ -141,6 +142,8 @@ export function CashIn({
   onAttach: (file: Blob, requestId: number) => void;
   /** Open the GCash receipt attached to a finished request. */
   onViewReceipt: (txnId: number) => void;
+  /** Tindera's + menu: open the form for this kind (a new nonce re-opens it). */
+  startRequest?: { kind: RequestKind; nonce: number } | null;
 }) {
   const ui = useUi();
   const isManager = user.role !== 'tindera';
@@ -164,7 +167,14 @@ export function CashIn({
   const [scanning, setScanning] = useState(false);
   const [proofView, setProofView] = useState<number | null>(null);
   const scanInput = useRef<HTMLInputElement>(null);
-  const isBank = kind === 'cashout' && source === 'bank';
+  const isBank = kind !== 'cashin' && source === 'bank';
+  // Tindera picked Cash in / Cash out / Payment from the + menu.
+  useEffect(() => {
+    if (!startRequest) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing from the + menu choice
+    setKind(startRequest.kind);
+    setFormOpen(true);
+  }, [startRequest]);
   const setBankField = (k: keyof typeof bank, v: string) => setBank((b) => ({ ...b, [k]: v }));
 
   /** Read the customer's receipt photo (only the framed part), and fill in what we can. */
@@ -297,16 +307,16 @@ export function CashIn({
     setSending(true);
     try {
       markLocalAction();
-      const proofPayload = kind === 'cashout' && proof ? await blobToPayload(await compressForStorage(proof).catch(() => proof)) : null;
+      const proofPayload = kind !== 'cashin' && proof ? await blobToPayload(await compressForStorage(proof).catch(() => proof)) : null;
       await api.addCashin({
         ...form,
         number: digits,
         businessId,
         kind,
-        source: kind === 'cashout' ? source : 'gcash',
+        source: kind !== 'cashin' ? source : 'gcash',
         bankName: isBank ? bank.bankName : '',
         accountLast4: isBank ? bank.accountLast4 : '',
-        refNo: kind === 'cashout' ? bank.refNo : '',
+        refNo: kind !== 'cashin' ? bank.refNo : '',
         proof: proofPayload,
       });
       ui.toast(isBank ? `Sent to the owner: ${bank.bankName} cash-out` : `Sent to the owner: ${form.number}`);
@@ -360,7 +370,7 @@ export function CashIn({
     if (
       status === 'cancelled' &&
       !(await ui.confirm({
-        title: `Cancel this ${r.kind === 'cashout' ? 'cash-out' : 'cash-in'}?`,
+        title: `Cancel this ${KIND_INFO[r.kind].label.toLowerCase()}?`,
         message: `${prettyNumber(r.number)}${r.gcashName ? ` · ${r.gcashName.toUpperCase()}` : ''}${r.amount !== null ? ` · ${peso(r.amount)}` : ''}`,
         confirmText: 'Cancel request',
         cancelText: 'Keep',
@@ -372,7 +382,7 @@ export function CashIn({
     try {
       markLocalAction();
       await api.updateCashin(r.id, status);
-      ui.toast(status === 'done' ? (r.kind === 'cashout' ? 'Marked as received' : 'Marked as sent') : 'Request cancelled', status === 'done' ? 'success' : 'info');
+      ui.toast(status === 'done' ? (r.kind === 'cashin' ? 'Marked as sent' : 'Marked as received') : 'Request cancelled', status === 'done' ? 'success' : 'info');
       await load();
     } catch (err) {
       ui.toast(err instanceof Error ? err.message : String(err), 'error');
@@ -384,13 +394,13 @@ export function CashIn({
   const pending = items.filter(isOpen);
   const finished = items.filter((r) => !isOpen(r));
 
-  const doneWord = (r: CashinRequest) => (r.kind === 'cashout' ? 'Received' : 'Sent');
+  const doneWord = (r: CashinRequest) => (r.kind === 'cashin' ? 'Sent' : 'Received');
   const statusLabel = (r: CashinRequest) =>
     r.status === 'pending' ? 'Waiting' : r.status === 'processing' ? 'Processing' : r.status === 'done' ? doneWord(r) : 'Cancelled';
 
   const card = (r: CashinRequest) => (
     <li key={r.id} className={`cashin-card ${r.status} kind-${r.kind}`}>
-      <span className={`kind-badge ${r.kind}`}>{r.kind === 'cashout' ? 'Cash out' : 'Cash in'}</span>
+      <span className={`kind-badge ${r.kind}`}>{KIND_INFO[r.kind].label}</span>
       <span className={`status-pill ${r.status}`}>{statusLabel(r)}</span>
       <div className="cashin-top">
         {r.source === 'bank' ? (
@@ -430,7 +440,7 @@ export function CashIn({
       </div>
       {r.status === 'done' && r.txnId && (
         <button className="pill-btn receipt-link" onClick={() => onViewReceipt(r.txnId as number)}>
-          <Icon name="receipt" size={16} /> {r.kind === 'cashout' ? 'View saved record' : 'View GCash receipt'}
+          <Icon name="receipt" size={16} /> {r.kind === 'cashin' ? 'View GCash receipt' : 'View saved record'}
         </button>
       )}
 
@@ -453,7 +463,7 @@ export function CashIn({
                 {copiedId === r.id ? 'Copied' : isManager && r.kind === 'cashin' && isPhone() ? 'Copy & open GCash' : 'Copy number'}
               </button>
             )}
-            {isManager && r.kind === 'cashout' && (
+            {isManager && r.kind !== 'cashin' && (
               <button className="btn done-btn" onClick={() => update(r, 'done')} disabled={busyId === r.id}>
                 <Icon name="check" size={18} /> {doneWord(r)}
               </button>
@@ -478,17 +488,17 @@ export function CashIn({
           {!isManager && r.status === 'processing' && <span className="hint processing-hint">The owner is sending it now…</span>}
           {!isManager && r.createdBy === user.id && r.status === 'pending' && (
             <button className="btn remind-btn" onClick={() => remind(r)} disabled={remindCooldown[r.id]}>
-              🔔 {r.kind === 'cashout' ? 'Pa cash out po!' : 'Pa cash in po!'}
+              🔔 {r.kind === 'payment' ? 'May bayad po!' : r.kind === 'cashout' ? 'Pa cash out po!' : 'Pa cash in po!'}
               <small>{remindCooldown[r.id] ? 'Sent to owner' : 'Tap to remind the owner'}</small>
             </button>
           )}
-          {isManager && r.kind === 'cashout' && (
+          {isManager && r.kind !== 'cashin' && (
             <span className="hint">
               Check that {r.amount !== null ? peso(r.amount) : 'the money'} arrived in the store's GCash
-              {r.source === 'bank' ? ` from ${r.bankName || 'the bank'}` : ''}, then tap Received. It's saved as a received transaction.
+              {r.source === 'bank' ? ` from ${r.bankName || 'the bank'}` : ''}, then tap Received. {r.kind === 'payment' ? "It's saved as a payment." : "It's saved as a received transaction."}
             </span>
           )}
-          {isManager && r.kind === 'cashout' && !r.hasProof && (
+          {isManager && r.kind !== 'cashin' && !r.hasProof && (
             <button className="pill-btn attach-btn" onClick={() => processReceipt(r)}>
               <Icon name="image" size={16} /> Attach GCash receipt &amp; mark {doneWord(r).toLowerCase()}
             </button>
@@ -500,7 +510,7 @@ export function CashIn({
 
   const formEl = canCreate && !formOpen && (
     <button className="btn secondary block new-request-btn" onClick={() => setFormOpen(true)}>
-      <Icon name="plus" size={20} /> New cash-in / cash-out request
+      <Icon name="plus" size={20} /> New request
     </button>
   );
 
@@ -522,14 +532,19 @@ export function CashIn({
               <button type="button" role="tab" aria-selected={kind === 'cashout'} className={kind === 'cashout' ? 'active' : ''} onClick={() => setKind('cashout')}>
                 Cash out
               </button>
+              <button type="button" role="tab" aria-selected={kind === 'payment'} className={kind === 'payment' ? 'active' : ''} onClick={() => setKind('payment')}>
+                Payment
+              </button>
             </div>
             <span className="hint">
               {kind === 'cashin'
                 ? 'Customer pays cash; the owner sends GCash to their number.'
-                : 'Customer sends money to the store\'s GCash; the owner confirms, then you give the cash.'}
+                : kind === 'payment'
+                  ? "Customer pays for items by sending GCash to the store; the owner confirms it arrived."
+                  : 'Customer sends money to the store\'s GCash; the owner confirms, then you give the cash.'}
             </span>
           </div>
-          {kind === 'cashout' && (
+          {kind !== 'cashin' && (
             <div className="field">
               <span className="label">Customer sends from</span>
               <div className="segmented" role="tablist">
@@ -542,7 +557,7 @@ export function CashIn({
               </div>
             </div>
           )}
-          {kind === 'cashout' && (
+          {kind !== 'cashin' && (
             <div className="scan-proof">
               {proof && (
                 <span className="proof-thumb">

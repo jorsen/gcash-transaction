@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { api, imageUrl, setUnauthorizedHandler, type StaffUser, type Summary, type Txn, type User } from './api';
+import { api, imageUrl, KIND_INFO, kindOf, setUnauthorizedHandler, type RequestKind, type StaffUser, type Summary, type Txn, type User } from './api';
 import { Activity } from './Activity';
 import { AttachReceipt } from './AttachReceipt';
 import { exportCsv, uploadLocalRecords } from './backup';
@@ -243,10 +243,12 @@ function Home({
   const [typeFilter, setTypeFilter] = useState('');
   const [staff, setStaff] = useState<StaffUser[]>([]);
   const [items, setItems] = useState<Txn[]>([]);
-  const [summary, setSummary] = useState<Summary>({ count: 0, inflow: 0, outflow: 0 });
+  const [summary, setSummary] = useState<Summary>({ count: 0, inflow: 0, outflow: 0, cashin: 0, cashout: 0, payment: 0 });
+  /** Tindera's + menu: which request form to open (nonce re-opens the same kind). */
+  const [startRequest, setStartRequest] = useState<{ kind: RequestKind; nonce: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [sheet, setSheet] = useState<'scan' | 'account' | null>(null);
+  const [sheet, setSheet] = useState<'scan' | 'account' | 'request' | null>(null);
   const [localCount, setLocalCount] = useState(0);
   const [uploading, setUploading] = useState('');
   const [installEvt, setInstallEvt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -366,8 +368,9 @@ function Home({
     const onMsg = (e: MessageEvent) => {
       const d = e.data;
       if (d?.type !== 'push-received' || (d.event !== 'request' && d.event !== 'remind')) return;
-      announceRequest(d.kind === 'cashout' ? 'cashout' : 'cashin', false, d.event === 'remind');
-      ui.toast(d.event === 'remind' ? (d.kind === 'cashout' ? 'Ate, pa cash-out po! (reminder)' : 'Ate, pa cash-in po! (reminder)') : d.kind === 'cashout' ? 'Ate, pa cash-out po!' : 'Ate, pa cash-in po!', 'info');
+      const k = kindOf(d.kind);
+      announceRequest(k, false, d.event === 'remind');
+      ui.toast(`${KIND_INFO[k].shout}${d.event === 'remind' ? ' (reminder)' : ''}`, 'info');
     };
     navigator.serviceWorker?.addEventListener('message', onMsg);
     return () => navigator.serviceWorker?.removeEventListener('message', onMsg);
@@ -386,7 +389,7 @@ function Home({
         // Chime + "Cash in po!" / "Pa-cash out po!" (unless the push already rang for it)
         announceRequest(live.latestKind ?? 'cashin');
         const n = live.pending - lastPending.current;
-        ui.toast(n > 1 ? `${n} new requests` : live.latestKind === 'cashout' ? 'Ate, pa cash-out po!' : 'Ate, pa cash-in po!', 'info');
+        ui.toast(n > 1 ? `${n} new requests` : KIND_INFO[kindOf(live.latestKind)].shout, 'info');
       } else if (!isOwner && live.pending < lastPending.current) {
         playChime('done');
         ui.toast('The owner handled your cash-in request', 'info');
@@ -398,9 +401,9 @@ function Home({
     }
     // A tindera pressed "Pa cash in po!" again (fallback when push isn't on for this device).
     if (isOwner && lastRemind.current !== undefined && live.lastRemind && live.lastRemind !== lastRemind.current && !recentlyAnnounced()) {
-      const kind = live.lastRemind.endsWith('|cashout') ? 'cashout' : 'cashin';
+      const kind = kindOf(live.lastRemind.split('|').pop());
       announceRequest(kind, false, true);
-      ui.toast(kind === 'cashout' ? 'Ate, pa cash-out po! (reminder)' : 'Ate, pa cash-in po! (reminder)', 'info');
+      ui.toast(`${KIND_INFO[kind].shout} (reminder)`, 'info');
     }
     lastRemind.current = live.lastRemind;
     lastReceipts.current = live.receipts;
@@ -620,6 +623,7 @@ function Home({
             liveStamp={live?.cashin ?? null}
             onAttach={(file, requestId) => onOpen({ name: 'attach', file, requestId })}
             onViewReceipt={(id) => onOpen({ name: 'review', id })}
+            startRequest={startRequest}
           />
         ) : (
           <>
@@ -636,11 +640,15 @@ function Home({
               <div className="summary-grid">
                 <div>
                   <div className="summary-sub">Cash-In</div>
-                  <div className="summary-value">{peso(summary.outflow)}</div>
+                  <div className="summary-value">{peso(summary.cashin ?? summary.outflow)}</div>
                 </div>
                 <div>
                   <div className="summary-sub">Cash-Out</div>
-                  <div className="summary-value">{peso(summary.inflow)}</div>
+                  <div className="summary-value">{peso(summary.cashout ?? summary.inflow)}</div>
+                </div>
+                <div>
+                  <div className="summary-sub">Payment</div>
+                  <div className="summary-value">{peso(summary.payment ?? 0)}</div>
                 </div>
               </div>
               <div className="summary-foot">
@@ -738,7 +746,7 @@ function Home({
                           <span className="row-main">
                             {t.recipient ? <MaskedName name={t.recipient} className="row-title" /> : <span className="row-title">{t.type}</span>}
                             <span className="row-sub">
-                              <span className={`type-tag ${t.type === 'Cash In' ? 'cashin' : isIncoming(t.type) ? 'cashout' : ''}`}>{t.type}</span> · {timeLabel(t.txnDate)}
+                              <span className={`type-tag ${t.type === 'Cash In' ? 'cashin' : t.type === 'Payment' ? 'payment' : isIncoming(t.type) ? 'cashout' : ''}`}>{t.type}</span> · {timeLabel(t.txnDate)}
                               {t.refNo ? ` · Ref ${t.refNo}` : ''}
                             </span>
                             {isOwner && <span className="row-by">by {t.requestedByName || t.createdByName}</span>}
@@ -766,11 +774,8 @@ function Home({
         {canRequest ? (
           <button
             className="fab"
-            aria-label="New cash-in / cash-out request"
-            onClick={() => {
-              setTab('cashin');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
+            aria-label="New request: cash in, cash out or payment"
+            onClick={() => setSheet('request')}
           >
             <Icon name="plus" size={30} />
           </button>
@@ -795,6 +800,1128 @@ function Home({
             { icon: 'camera', label: 'Take a photo', hint: 'Use the camera on a printed or on-screen receipt', onClick: () => cameraRef.current?.click() },
             { icon: 'image', label: 'Choose from gallery', hint: 'Pick a GCash receipt screenshot', onClick: () => galleryRef.current?.click() },
           ]}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
+        />
+      )}
+      {sheet === 'request' && (
+        <ActionSheet
+          title="New request"
+          onClose={() => setSheet(null)}
+          actions={(
+            [
+              ['cashin', 'Customer pays cash; the owner sends GCash to them'],
+              ['cashout', 'Customer sends GCash to the store; you give them cash'],
+              ['payment', 'Customer pays for items by sending GCash to the store'],
+            ] as [RequestKind, string][]
+          ).map(([kind, hint]) => ({
+            icon: 'cash' as const,
+            label: KIND_INFO[kind].label,
+            hint,
+            onClick: () => {
+              setTab('cashin');
+              setStartRequest({ kind, nonce: Date.now() });
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+          }))}
         />
       )}
       {sheet === 'account' && (
