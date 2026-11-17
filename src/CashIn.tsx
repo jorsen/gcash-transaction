@@ -252,7 +252,19 @@ export function CashIn({
             <Icon name={copiedId === r.id ? 'check' : 'copy'} size={18} />
             {copiedId === r.id ? 'Copied' : 'Copy number'}
           </button>
-          {isManager && (
+          {isManager && r.kind === 'cashin' && (
+            <button
+              className="btn done-btn"
+              onClick={() => {
+                attachFor.current = r.id;
+                attachInput.current?.click();
+              }}
+              disabled={busyId === r.id}
+            >
+              <Icon name="image" size={18} /> Upload receipt
+            </button>
+          )}
+          {isManager && r.kind === 'cashout' && (
             <button className="btn done-btn" onClick={() => update(r, 'done')} disabled={busyId === r.id}>
               <Icon name="check" size={18} /> {doneWord(r)}
             </button>
@@ -263,7 +275,10 @@ export function CashIn({
             </button>
           )}
         </div>
-        {isManager && (
+        {isManager && r.kind === 'cashin' && (
+          <span className="hint">Send it in GCash, then upload the GCash receipt to mark it sent.</span>
+        )}
+        {isManager && r.kind === 'cashout' && (
           <button
             className="pill-btn attach-btn"
             onClick={() => {

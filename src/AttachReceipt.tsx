@@ -218,9 +218,11 @@ export function AttachReceipt({
       </main>
 
       <div className="sticky-actions">
-        <button className="btn secondary" onClick={() => save(false)} disabled={saving || reading}>
-          Receipt only
-        </button>
+        {requestId === undefined && (
+          <button className="btn secondary" onClick={() => save(false)} disabled={saving || reading}>
+            Receipt only
+          </button>
+        )}
         <button className="btn primary" onClick={() => save(true)} disabled={saving || reading || !chosen}>
           {saving ? 'Saving…' : doneLabel}
         </button>

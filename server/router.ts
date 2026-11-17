@@ -610,6 +610,9 @@ async function route(req: Request): Promise<Response> {
       if (!t || t.businessId !== r.businessId) throw new HttpError(400, 'That receipt is not in this business.');
       txnId = Number(b.txnId);
     }
+    if (b.status === 'done' && r.kind === 'cashin' && txnId === null) {
+      throw new HttpError(400, 'Upload the GCash receipt first, then the cash-in is marked as sent.');
+    }
     if (me.role === 'tindera' && (r.createdBy !== me.id || b.status !== 'cancelled')) {
       throw new HttpError(403, 'Only the owner can mark a cash-in as done.');
     }
