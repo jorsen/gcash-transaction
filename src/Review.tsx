@@ -124,7 +124,7 @@ export function Review({
           setRawText(t.rawText ?? '');
           setCreatedByName(t.createdByName);
           setRequested(t.requestedName || t.requestedNumber ? { name: t.requestedName, number: t.requestedNumber, by: t.requestedByName } : null);
-          setReadOnly(user.role === 'tindera' && t.createdBy !== user.id);
+          setReadOnly(true); // saved transactions are view only (no editing)
           setForm({
             type: t.type,
             amount: t.amount.toFixed(2),
@@ -257,7 +257,7 @@ export function Review({
       </header>
 
       <main className={`content ${readOnly ? 'read-only' : ''}`}>
-        {readOnly && <div className="notice">GCash receipt attached by {createdByName} for your request (view only).</div>}
+        {readOnly && user.role === 'tindera' && <div className="notice">GCash receipt attached by {createdByName} for your request (view only).</div>}
         {loading ? (
           <div className="center">
             <span className="spinner big" />

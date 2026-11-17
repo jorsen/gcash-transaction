@@ -1017,23 +1017,8 @@ async function route(req: Request): Promise<Response> {
     if (parts.length === 2 && m === 'GET') return json({ txn: await loadTxn(id, me) });
 
     if (parts.length === 2 && m === 'PUT') {
-      const before = await loadTxn(id, me, { forEdit: true });
-      const b = await body<TxnBody>(req);
-      const t = cleanTxn(b);
-      await query(
-        `UPDATE transactions SET type = $1, amount = $2, ref_no = $3, recipient = $4, phone = $5,
-           txn_date = $6, note = $7, raw_text = $8, updated_at = NOW() WHERE id = $9`,
-        [t.type, t.amount, t.refNo, t.recipient, t.phone, t.txnDate, t.note, t.rawText, id],
-      );
-      await saveImage(id, b.image === undefined ? undefined : cleanImage(b.image));
-      const changed = before.amount !== t.amount ? ` (amount ${peso(before.amount)} → ${peso(t.amount)})` : '';
-      await logActivity(req, me, before.businessId, {
-        action: 'receipt.update',
-        summary: `Edited a receipt · ${t.type} ${peso(t.amount)}${t.refNo ? ` · Ref ${t.refNo}` : ''}${changed}`,
-        targetType: 'transaction',
-        targetId: id,
-      });
-      return json({ ok: true });
+      // Saved transactions can't be edited (only viewed, or deleted by the owner).
+      throw new HttpError(403, "Saved transactions can't be edited.");
     }
 
     if (parts.length === 2 && m === 'DELETE') {
