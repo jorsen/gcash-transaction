@@ -484,10 +484,11 @@ async function route(req: Request): Promise<Response> {
     else if (url.searchParams.get('userId')) add('t.created_by = ?', Number(url.searchParams.get('userId')));
     if (/^\d{4}-\d{2}$/.test(month) && !search) add('substr(t.txn_date, 1, 7) = ?', month);
     // Type filter: "cashin" (store sent GCash), "cashout" (customer sent GCash to the store), or one receipt type.
+    // "in" / "out" come from app versions still cached on phones, where those chips were also labelled Cash-In / Cash-Out.
     const type = url.searchParams.get('type') ?? '';
-    if (type === 'cashin') where.push(`t.type IN ('Cash In', 'Send Money')`);
-    else if (type === 'cashout') where.push(`t.type IN ('Cash Out', 'Received')`);
-    else if (type) add('t.type = ?', type.slice(0, 40));
+    if (type === 'cashin' || type === 'in' || type === 'Cash In') where.push(`t.type IN ('Cash In', 'Send Money')`);
+    else if (type === 'cashout' || type === 'out' || type === 'Cash Out') where.push(`t.type IN ('Cash Out', 'Received')`);
+    else if (TXN_TYPES.includes(type as never)) add('t.type = ?', type); // unknown values: no filter rather than an empty list
     if (search) {
       params.push(`%${search}%`);
       const p = `$${params.length}`;
