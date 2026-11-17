@@ -221,7 +221,9 @@ function Home({
   const ui = useUi();
   const isSuper = user.role === 'superadmin';
   const isOwner = user.role !== 'tindera'; // owner or super admin: sees and manages the whole business
-  const canCapture = !isSuper;
+  // Only the owner saves receipts; a tindera's + starts a cash-in / cash-out request instead.
+  const canCapture = isOwner && !isSuper;
+  const canRequest = !isSuper;
   const scopeId = isSuper ? biz.id : null;
   const [month, setMonth] = useState(thisMonth);
   const [search, setSearch] = useState('');
@@ -280,7 +282,8 @@ function Home({
             // ignore
           }
         } else {
-          onOpen({ name: 'review', file: new File([blob], 'gcash-receipt.jpg', { type: blob.type || 'image/jpeg' }) });
+          setTab('cashin');
+          ui.toast('Only the owner saves GCash receipts. Send a cash-in / cash-out request instead.', 'info');
         }
       } catch {
         ui.toast('Could not open the shared receipt', 'error');
@@ -538,7 +541,7 @@ function Home({
     }
   };
 
-  const canInstall = canCapture && !isStandalone() && (installEvt !== null || isIos());
+  const canInstall = canRequest &&!isStandalone() && (installEvt !== null || isIos());
   const tinderas = staff.filter((s) => s.role === 'tindera');
   const roleLabel = isSuper ? 'Super admin view' : user.role === 'owner' ? 'Owner' : 'Tindera';
 
@@ -735,11 +738,22 @@ function Home({
           <Icon name="receipt" />
           <span>Receipts</span>
         </button>
-        {canCapture && (
+        {canCapture ? (
           <button className="fab" aria-label="Add receipt" onClick={() => setSheet('scan')}>
             <Icon name="plus" size={30} />
           </button>
-        )}
+        ) : canRequest ? (
+          <button
+            className="fab"
+            aria-label="New cash-in / cash-out request"
+            onClick={() => {
+              setTab('cashin');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+          >
+            <Icon name="plus" size={30} />
+          </button>
+        ) : null}
         <button className={tab === 'cashin' ? 'active' : ''} aria-current={tab === 'cashin'} onClick={() => setTab('cashin')}>
           <span className="nav-icon">
             <Icon name="cash" />

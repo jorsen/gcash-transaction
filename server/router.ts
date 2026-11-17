@@ -477,6 +477,8 @@ async function route(req: Request): Promise<Response> {
 
   if (path === 'transactions' && m === 'POST') {
     const me = requireUser(user);
+    // Only the owner saves receipts (from cash-in/cash-out requests or the + button); staff don't.
+    if (me.role === 'tindera') throw new HttpError(403, 'Only the owner saves receipts. Send a cash-in / cash-out request instead.');
     const b = await body<TxnBody>(req);
     const businessId = businessScope(me, b.businessId);
     const t = cleanTxn(b);
@@ -657,14 +659,14 @@ async function route(req: Request): Promise<Response> {
     if ((kind === 'cashin' && !gcashName) || gcashName.length > 80) {
       throw new HttpError(400, 'Enter the GCash name (asterisks are OK, e.g. JU** DE* C.).');
     }
-    let amount: number | null = null;
-    if (b.amount !== undefined && b.amount !== null && String(b.amount).trim() !== '') {
-      amount = Number(String(b.amount).replace(/,/g, ''));
-      if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) throw new HttpError(400, 'Please enter a valid amount.');
-      amount = Math.round(amount * 100) / 100;
+    // Every request needs an amount, so the owner knows how much to send / check.
+    const rawAmount = String(b.amount ?? '').replace(/,/g, '').trim();
+    let amount = Number(rawAmount);
+    if (!rawAmount || !Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) {
+      throw new HttpError(400, kind === 'cashout' ? 'Enter the amount the customer sent.' : 'Enter the amount to cash in.');
     }
+    amount = Math.round(amount * 100) / 100;
     const note = String(b.note ?? '').trim().slice(0, 500);
-    if (source === 'bank' && amount === null) throw new HttpError(400, 'Enter the amount the customer sent.');
     const [row] = await query<{ id: number }>(
       `INSERT INTO cashin_requests (business_id, created_by, number, gcash_name, amount, note, kind, source, bank_name, account_last4, ref_no)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,

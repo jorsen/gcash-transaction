@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, blobToPayload, proofUrl, type CashinRequest, type RequestKind, type User } from './api';
 import { BlobImage } from './BlobImage';
+import { CameraSheet } from './CameraSheet';
 import { CropSheet } from './CropSheet';
 import { compressForStorage, type CropBox } from './image';
 import { recognizeText } from './ocr';
@@ -157,6 +158,7 @@ export function CashIn({
   const [bank, setBank] = useState({ bankName: '', accountLast4: '', refNo: '' });
   const [proof, setProof] = useState<Blob | null>(null);
   const [cropFile, setCropFile] = useState<Blob | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [scanMsg, setScanMsg] = useState('');
   const [scanning, setScanning] = useState(false);
   const [proofView, setProofView] = useState<number | null>(null);
@@ -248,6 +250,8 @@ export function CashIn({
 
   const set = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
+  const amountNum = Number(form.amount.replace(/,/g, '').trim());
+  const amountOk = form.amount.trim() !== '' && Number.isFinite(amountNum) && amountNum > 0;
   const digits = toMobileDigits(form.number);
   const status = mobileStatus(digits);
   const [knownNames, setKnownNames] = useState<string[]>([]);
@@ -540,9 +544,14 @@ export function CashIn({
                 </span>
               )}
               <div className="scan-proof-main">
-                <button type="button" className="btn secondary block" onClick={() => scanInput.current?.click()} disabled={scanning}>
-                  <Icon name="camera" size={20} /> {proof ? 'Scan again' : "Scan customer's receipt"}
-                </button>
+                <div className="scan-buttons">
+                  <button type="button" className="btn secondary grow" onClick={() => setCameraOpen(true)} disabled={scanning}>
+                    <Icon name="camera" size={20} /> {proof ? 'Scan again' : "Scan customer's receipt"}
+                  </button>
+                  <button type="button" className="btn secondary" onClick={() => scanInput.current?.click()} disabled={scanning} aria-label="Upload a photo">
+                    <Icon name="image" size={20} /> Upload
+                  </button>
+                </div>
                 {scanMsg ? (
                   <span className={`hint ${scanning ? '' : 'known'}`}>
                     {scanning && <span className="spinner" />} {scanMsg}
@@ -680,7 +689,15 @@ export function CashIn({
           </label>
           <label className="field">
             <span className="label">Amount (₱)</span>
-            <input className="input" inputMode="decimal" placeholder="0.00" value={form.amount} onChange={(e) => set('amount', e.target.value)} />
+            <input
+              className="input"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={form.amount}
+              onChange={(e) => set('amount', e.target.value.replace(/[^\d.,]/g, ''))}
+              required
+            />
+            {form.amount.trim() !== '' && !amountOk && <span className="number-status bad">✗ Enter a valid amount</span>}
           </label>
           <label className="field">
             <span className="label">Note (optional)</span>
@@ -689,7 +706,7 @@ export function CashIn({
           {formError && <div className="error">{formError}</div>}
           <button
             className="btn primary block"
-            disabled={sending || scanning || (isBank ? !bank.bankName.trim() || !form.amount.trim() : !status?.ok)}
+            disabled={sending || scanning || !amountOk || (isBank ? !bank.bankName.trim() : !status?.ok)}
           >
             {sending ? 'Sending…' : 'Send to owner'}
           </button>
@@ -746,6 +763,20 @@ export function CashIn({
 
   const overlays = (
     <>
+      {cameraOpen && (
+        <CameraSheet
+          title="Scan the customer's receipt"
+          onCancel={() => setCameraOpen(false)}
+          onCapture={(photo) => {
+            setCameraOpen(false);
+            setCropFile(photo);
+          }}
+          onGallery={() => {
+            setCameraOpen(false);
+            scanInput.current?.click();
+          }}
+        />
+      )}
       {cropFile && (
         <CropSheet
           file={cropFile}
