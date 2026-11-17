@@ -87,6 +87,13 @@ export interface CashinRequest {
   status: 'pending' | 'processing' | 'done' | 'cancelled';
   processingAt: string | null;
   processingByName: string | null;
+  /** Cash-out only: customer sends from their GCash, or from another bank (InstaPay/PESONet). */
+  source: 'gcash' | 'bank';
+  bankName: string;
+  accountLast4: string;
+  refNo: string;
+  /** A photo of the customer's transfer receipt was attached. */
+  hasProof: boolean;
   /** Times the tindera pressed "Pa cash in po!" again. */
   remindCount: number;
   lastRemindedAt: string | null;
@@ -203,7 +210,19 @@ export const api = {
     if (q.pendingOnly) p.set('status', 'pending');
     return request<{ items: CashinRequest[]; pending: number }>('GET', `cashin?${p}`);
   },
-  addCashin: (b: { number: string; gcashName: string; amount?: string; note?: string; businessId?: number | null; kind?: RequestKind }) =>
+  addCashin: (b: {
+    number: string;
+    gcashName: string;
+    amount?: string;
+    note?: string;
+    businessId?: number | null;
+    kind?: RequestKind;
+    source?: 'gcash' | 'bank';
+    bankName?: string;
+    accountLast4?: string;
+    refNo?: string;
+    proof?: { mime: string; base64: string } | null;
+  }) =>
     request<{ id: number }>('POST', 'cashin', b),
   cashinLookup: (number: string, businessId?: number | null) =>
     request<{ names: { name: string; at: string; source: string }[] }>(
@@ -220,6 +239,9 @@ export const api = {
       `check-ref?ref=${encodeURIComponent(ref)}&excludeId=${excludeId ?? 0}${businessId ? `&businessId=${businessId}` : ''}`,
     ),
 };
+
+/** Photo of the customer's transfer receipt attached to a cash-out request. */
+export const proofUrl = (requestId: number) => `/api/cashin/${requestId}/proof`;
 
 export const imageUrl = (t: Pick<Txn, 'id' | 'updatedAt'>) =>
   `/api/transactions/${t.id}/image?v=${encodeURIComponent(t.updatedAt)}`;

@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { api, type CashinRequest, type RequestKind, type User } from './api';
+import { api, blobToPayload, proofUrl, type CashinRequest, type RequestKind, type User } from './api';
+import { BlobImage } from './BlobImage';
+import { CropSheet } from './CropSheet';
+import { compressForStorage, type CropBox } from './image';
+import { recognizeText } from './ocr';
+import { looksLikeBankTransfer, parseBankTransfer } from './parseBank';
+import { parseGcashReceipt } from './parseGcash';
 import { peso } from './format';
 import { markLocalAction } from './sound';
 import { Icon, SkeletonRows, useUi } from './ui';
@@ -146,6 +152,59 @@ export function CashIn({
   const [error, setError] = useState('');
   const [form, setForm] = useState({ number: '', gcashName: '', amount: '', note: '' });
   const [kind, setKind] = useState<RequestKind>('cashin');
+  // Cash-out: where the customer sends from, bank details, and a photo of their receipt as proof.
+  const [source, setSource] = useState<'gcash' | 'bank'>('gcash');
+  const [bank, setBank] = useState({ bankName: '', accountLast4: '', refNo: '' });
+  const [proof, setProof] = useState<Blob | null>(null);
+  const [cropFile, setCropFile] = useState<Blob | null>(null);
+  const [scanMsg, setScanMsg] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [proofView, setProofView] = useState<number | null>(null);
+  const scanInput = useRef<HTMLInputElement>(null);
+  const isBank = kind === 'cashout' && source === 'bank';
+  const setBankField = (k: keyof typeof bank, v: string) => setBank((b) => ({ ...b, [k]: v }));
+
+  /** Read the customer's receipt photo (only the framed part), and fill in what we can. */
+  const scanProof = async (file: Blob, crop?: CropBox) => {
+    setCropFile(null);
+    setProof(file);
+    setScanning(true);
+    setScanMsg('Reading receipt…');
+    try {
+      const text = await recognizeText(file, (p) => setScanMsg(p), { crop, enhance: true, multiPass: true });
+      if (looksLikeBankTransfer(text)) {
+        const p = parseBankTransfer(text);
+        setSource('bank');
+        setBank((b) => ({
+          bankName: p.from.bank || b.bankName,
+          accountLast4: p.from.last4 || b.accountLast4,
+          refNo: p.refNo || b.refNo,
+        }));
+        setForm((f) => ({
+          ...f,
+          gcashName: p.from.name ? p.from.name.toUpperCase() : f.gcashName,
+          amount: p.amount !== null ? p.amount.toFixed(2) : f.amount,
+        }));
+        const got = [
+          p.amount !== null && 'amount',
+          p.from.name && 'sender',
+          p.from.bank && 'bank',
+          p.from.last4 && 'account',
+          p.refNo && 'reference no.',
+        ].filter(Boolean);
+        setScanMsg(got.length ? `${p.channel || 'Bank transfer'} · read ${got.join(', ')}. Check every field before sending.` : "Couldn't read it. Type the details below.");
+      } else {
+        const p = parseGcashReceipt(text);
+        setForm((f) => ({ ...f, amount: p.amount !== null ? p.amount.toFixed(2) : f.amount }));
+        if (p.refNo) setBankField('refNo', p.refNo);
+        setScanMsg(p.amount !== null ? 'Read the amount. Check the details before sending.' : "Couldn't read it. Type the details below.");
+      }
+    } catch (e) {
+      setScanMsg(`Couldn't read the receipt (${e instanceof Error ? e.message : String(e)}). Type the details below.`);
+    } finally {
+      setScanning(false);
+    }
+  };
   const attachInput = useRef<HTMLInputElement>(null);
   const attachFor = useRef<number | null>(null);
   const [formError, setFormError] = useState('');
@@ -228,9 +287,24 @@ export function CashIn({
     setSending(true);
     try {
       markLocalAction();
-      await api.addCashin({ ...form, number: digits, businessId, kind });
-      ui.toast(`Sent to the owner: ${form.number}`);
+      const proofPayload = kind === 'cashout' && proof ? await blobToPayload(await compressForStorage(proof).catch(() => proof)) : null;
+      await api.addCashin({
+        ...form,
+        number: digits,
+        businessId,
+        kind,
+        source: kind === 'cashout' ? source : 'gcash',
+        bankName: isBank ? bank.bankName : '',
+        accountLast4: isBank ? bank.accountLast4 : '',
+        refNo: kind === 'cashout' ? bank.refNo : '',
+        proof: proofPayload,
+      });
+      ui.toast(isBank ? `Sent to the owner: ${bank.bankName} cash-out` : `Sent to the owner: ${form.number}`);
       setForm({ number: '', gcashName: '', amount: '', note: '' });
+      setBank({ bankName: '', accountLast4: '', refNo: '' });
+      setProof(null);
+      setScanMsg('');
+      setSource('gcash');
       setAutoFilled(false);
       load();
     } catch (err) {
@@ -309,10 +383,28 @@ export function CashIn({
       <span className={`kind-badge ${r.kind}`}>{r.kind === 'cashout' ? 'Cash out' : 'Cash in'}</span>
       <span className={`status-pill ${r.status}`}>{statusLabel(r)}</span>
       <div className="cashin-top">
-        <span className="cashin-number">{prettyNumber(r.number)}</span>
+        {r.source === 'bank' ? (
+          <span className="cashin-number bank">
+            🏦 {r.bankName || 'Bank'}
+            {r.accountLast4 ? <small> ••{r.accountLast4}</small> : null}
+          </span>
+        ) : (
+          <span className="cashin-number">{prettyNumber(r.number)}</span>
+        )}
         {r.amount !== null && <span className="cashin-amount">{peso(r.amount)}</span>}
       </div>
       {r.gcashName && <MaskedName name={r.gcashName} />}
+      {(r.source === 'bank' || r.refNo) && (
+        <div className="row-sub">
+          {r.source === 'bank' ? 'InstaPay / bank transfer to GCash' : 'GCash'}
+          {r.refNo ? ` · Ref ${r.refNo}` : ''}
+        </div>
+      )}
+      {r.hasProof && (
+        <button className="pill-btn proof-btn" onClick={() => setProofView(r.id)}>
+          <Icon name="image" size={16} /> View customer's receipt
+        </button>
+      )}
       {r.note && <div className="row-sub">{r.note}</div>}
       {isOpen(r) && r.remindCount > 0 && (
         <span className={`remind-badge ${isManager ? 'urgent' : ''}`}>
@@ -328,7 +420,7 @@ export function CashIn({
       </div>
       {r.status === 'done' && r.txnId && (
         <button className="pill-btn receipt-link" onClick={() => onViewReceipt(r.txnId as number)}>
-          <Icon name="receipt" size={16} /> View GCash receipt
+          <Icon name="receipt" size={16} /> {r.kind === 'cashout' ? 'View saved record' : 'View GCash receipt'}
         </button>
       )}
 
@@ -345,7 +437,7 @@ export function CashIn({
                   <Icon name="image" size={18} /> Process
                 </button>
               </>
-            ) : (
+            ) : r.source === 'bank' ? null : (
               <button className={`btn primary copy-btn ${copiedId === r.id ? 'copied' : ''}`} onClick={() => copy(r)}>
                 <Icon name={copiedId === r.id ? 'check' : 'copy'} size={18} />
                 {copiedId === r.id ? 'Copied' : isManager && r.kind === 'cashin' && isPhone() ? 'Copy & open GCash' : 'Copy number'}
@@ -381,6 +473,12 @@ export function CashIn({
             </button>
           )}
           {isManager && r.kind === 'cashout' && (
+            <span className="hint">
+              Check that {r.amount !== null ? peso(r.amount) : 'the money'} arrived in the store's GCash
+              {r.source === 'bank' ? ` from ${r.bankName || 'the bank'}` : ''}, then tap Received. It's saved as a received transaction.
+            </span>
+          )}
+          {isManager && r.kind === 'cashout' && !r.hasProof && (
             <button className="pill-btn attach-btn" onClick={() => processReceipt(r)}>
               <Icon name="image" size={16} /> Attach GCash receipt &amp; mark {doneWord(r).toLowerCase()}
             </button>
@@ -418,9 +516,97 @@ export function CashIn({
             <span className="hint">
               {kind === 'cashin'
                 ? 'Customer pays cash; the owner sends GCash to their number.'
-                : 'Customer sends GCash to the store; the owner confirms, then you give the cash.'}
+                : 'Customer sends money to the store\'s GCash; the owner confirms, then you give the cash.'}
             </span>
           </div>
+          {kind === 'cashout' && (
+            <div className="field">
+              <span className="label">Customer sends from</span>
+              <div className="segmented" role="tablist">
+                <button type="button" role="tab" aria-selected={source === 'gcash'} className={source === 'gcash' ? 'active' : ''} onClick={() => setSource('gcash')}>
+                  GCash
+                </button>
+                <button type="button" role="tab" aria-selected={source === 'bank'} className={source === 'bank' ? 'active' : ''} onClick={() => setSource('bank')}>
+                  🏦 Bank / InstaPay
+                </button>
+              </div>
+            </div>
+          )}
+          {kind === 'cashout' && (
+            <div className="scan-proof">
+              {proof && (
+                <span className="proof-thumb">
+                  <BlobImage blob={proof} alt="Customer's receipt" />
+                </span>
+              )}
+              <div className="scan-proof-main">
+                <button type="button" className="btn secondary block" onClick={() => scanInput.current?.click()} disabled={scanning}>
+                  <Icon name="camera" size={20} /> {proof ? 'Scan again' : "Scan customer's receipt"}
+                </button>
+                {scanMsg ? (
+                  <span className={`hint ${scanning ? '' : 'known'}`}>
+                    {scanning && <span className="spinner" />} {scanMsg}
+                  </span>
+                ) : (
+                  <span className="hint">Take a photo of the customer's transfer receipt. It's kept as proof and fills in the details.</span>
+                )}
+                {proof && !scanning && (
+                  <button type="button" className="link danger-text small-link" onClick={() => { setProof(null); setScanMsg(''); }}>
+                    Remove photo
+                  </button>
+                )}
+              </div>
+              <input
+                ref={scanInput}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  if (f) setCropFile(f);
+                }}
+              />
+            </div>
+          )}
+          {isBank && (
+            <>
+              <label className="field">
+                <span className="label">Bank (sender)</span>
+                <input
+                  className="input"
+                  list="ph-banks"
+                  placeholder="e.g. GoTyme Bank, BDO, BPI, Maya"
+                  value={bank.bankName}
+                  onChange={(e) => setBankField('bankName', e.target.value)}
+                  required
+                />
+                <datalist id="ph-banks">
+                  {['GoTyme Bank', 'BDO', 'BPI', 'Metrobank', 'UnionBank', 'LandBank', 'Security Bank', 'RCBC', 'PNB', 'China Bank', 'EastWest', 'SeaBank', 'Maya', 'CIMB', 'Tonik', 'UNO Digital Bank', 'ShopeePay', 'Coins.ph'].map((b) => (
+                    <option key={b} value={b} />
+                  ))}
+                </datalist>
+              </label>
+              <div className="field-row">
+                <label className="field">
+                  <span className="label">Account (last 4)</span>
+                  <input
+                    className="input"
+                    inputMode="numeric"
+                    maxLength={4}
+                    placeholder="5340"
+                    value={bank.accountLast4}
+                    onChange={(e) => setBankField('accountLast4', e.target.value.replace(/\D/g, ''))}
+                  />
+                </label>
+                <label className="field grow">
+                  <span className="label">Reference No. (optional)</span>
+                  <input className="input mono" placeholder="IT0261117…" value={bank.refNo} onChange={(e) => setBankField('refNo', e.target.value)} autoCapitalize="characters" />
+                </label>
+              </div>
+            </>
+          )}
+          {!isBank && (
           <label className="field">
             <span className="label">{kind === 'cashin' ? "Customer's GCash number" : "Customer's GCash number (sender)"}</span>
             <input
@@ -451,11 +637,12 @@ export function CashIn({
               </span>
             )}
           </label>
+          )}
           <label className="field">
-            <span className="label">{kind === 'cashin' ? 'GCash name' : 'GCash name (optional)'}</span>
+            <span className="label">{isBank ? "Sender's name (as on the receipt)" : kind === 'cashin' ? 'GCash name' : 'GCash name (optional)'}</span>
             <input
               className="input mono"
-              placeholder="e.g. JU•• DE•A C."
+              placeholder={isBank ? 'e.g. J. GARCIA' : 'e.g. JU•• DE•A C.'}
               value={form.gcashName}
               onChange={(e) => {
                 setAutoFilled(false);
@@ -467,7 +654,7 @@ export function CashIn({
               spellCheck={false}
               required={kind === 'cashin'}
             />
-            {autoFilled ? (
+            {isBank ? null : autoFilled ? (
               <span className="hint known">Filled in from this customer's last transaction. Check it matches GCash.</span>
             ) : (
               <span className="hint">Type it as GCash shows it. Type hidden letters as * (saved as • like in GCash).</span>
@@ -500,7 +687,10 @@ export function CashIn({
             <input className="input" value={form.note} onChange={(e) => set('note', e.target.value)} />
           </label>
           {formError && <div className="error">{formError}</div>}
-          <button className="btn primary block" disabled={sending || !status?.ok}>
+          <button
+            className="btn primary block"
+            disabled={sending || scanning || (isBank ? !bank.bankName.trim() || !form.amount.trim() : !status?.ok)}
+          >
             {sending ? 'Sending…' : 'Send to owner'}
           </button>
         </form>
@@ -554,9 +744,28 @@ export function CashIn({
     />
   );
 
+  const overlays = (
+    <>
+      {cropFile && (
+        <CropSheet
+          file={cropFile}
+          title="Frame the customer's receipt"
+          onCancel={() => setCropFile(null)}
+          onDone={(crop) => scanProof(cropFile, crop)}
+        />
+      )}
+      {proofView !== null && (
+        <div className="zoom" onClick={() => setProofView(null)}>
+          <img src={proofUrl(proofView)} alt="Customer's transfer receipt" />
+        </div>
+      )}
+    </>
+  );
+
   // Tindera: form first. Owner: waiting requests first, form behind a button.
   return isManager ? (
     <>
+      {overlays}
       {attachPicker}
       {listEl}
       {formEl}
@@ -564,6 +773,7 @@ export function CashIn({
     </>
   ) : (
     <>
+      {overlays}
       {formEl}
       {form_}
       {listEl}

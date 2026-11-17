@@ -70,6 +70,17 @@ function businessScope(me: User, requested: unknown): number {
   return id;
 }
 
+/** "0917 123 4567 · JU•• DE•A C." or, for bank cash-outs, "InstaPay · GoTyme Bank ••5340 · J. GARCIA". */
+function describeRequest(r: { source?: string; number: string; gcashName: string; bankName?: string; accountLast4?: string }) {
+  if (r.source === 'bank') {
+    return [`${r.bankName || 'Bank'}${r.accountLast4 ? ` ••${r.accountLast4}` : ''}`, r.gcashName].filter(Boolean).join(' · ');
+  }
+  return [r.number ? prettyNumber(r.number) : '', r.gcashName].filter(Boolean).join(' · ');
+}
+
+/** Current Philippine time as "YYYY-MM-DD HH:mm" (server runs in UTC). */
+const phNow = () => new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 16).replace('T', ' ');
+
 /** Accepts 09XX…, +63 9XX…, 63 9XX…, 9XX… with any spacing; returns "09XXXXXXXXX". */
 function cleanMobile(v: unknown) {
   let d = String(v ?? '').replace(/\D/g, '');
@@ -601,7 +612,9 @@ async function route(req: Request): Promise<Response> {
               c.created_at AS "createdAt", c.handled_at AS "handledAt", c.created_by AS "createdBy",
               cu.name AS "createdByName", hu.name AS "handledByName", c.kind, c.txn_id AS "txnId",
               c.processing_at AS "processingAt", pu.name AS "processingByName",
-              c.remind_count AS "remindCount", c.last_reminded_at AS "lastRemindedAt"
+              c.remind_count AS "remindCount", c.last_reminded_at AS "lastRemindedAt",
+              c.source, c.bank_name AS "bankName", c.account_last4 AS "accountLast4", c.ref_no AS "refNo",
+              EXISTS (SELECT 1 FROM request_proofs p WHERE p.request_id = c.id) AS "hasProof"
          FROM cashin_requests c JOIN users cu ON cu.id = c.created_by LEFT JOIN users hu ON hu.id = c.handled_by
          LEFT JOIN users pu ON pu.id = c.processing_by
         WHERE ${where}
@@ -620,10 +633,24 @@ async function route(req: Request): Promise<Response> {
       note?: string;
       businessId?: number;
       kind?: 'cashin' | 'cashout';
+      /** Cash-out only: where the customer sends from — their GCash, or another bank via InstaPay/PESONet. */
+      source?: 'gcash' | 'bank';
+      bankName?: string;
+      accountLast4?: string;
+      refNo?: string;
+      /** Photo of the customer's transfer receipt (proof). */
+      proof?: { mime: string; base64: string } | null;
     }>(req);
     const businessId = businessScope(me, b.businessId);
     const kind = b.kind === 'cashout' ? 'cashout' : 'cashin';
-    const number = cleanMobile(b.number);
+    const source = kind === 'cashout' && b.source === 'bank' ? 'bank' : 'gcash';
+    // Bank cash-outs have no GCash number (the money comes from a bank account).
+    const number = source === 'bank' && !String(b.number ?? '').trim() ? '' : cleanMobile(b.number);
+    const bankName = source === 'bank' ? String(b.bankName ?? '').trim().slice(0, 60) : '';
+    const accountLast4 = source === 'bank' ? String(b.accountLast4 ?? '').replace(/\D/g, '').slice(-4) : '';
+    const refNo = String(b.refNo ?? '').replace(/\s+/g, '').toUpperCase().slice(0, 40);
+    if (source === 'bank' && !bankName) throw new HttpError(400, 'Enter the bank the customer sent from.');
+    const proof = cleanImage(b.proof);
     // Typed asterisks / OCR junk become GCash-style dots: "JU** DE*A C." -> "JU•• DE•A C."
     const gcashName = normalizeMaskedName(String(b.gcashName ?? '')).toUpperCase();
     // Cash-in needs the receiver's GCash name to check before sending; for cash-out it's optional.
@@ -637,14 +664,19 @@ async function route(req: Request): Promise<Response> {
       amount = Math.round(amount * 100) / 100;
     }
     const note = String(b.note ?? '').trim().slice(0, 500);
+    if (source === 'bank' && amount === null) throw new HttpError(400, 'Enter the amount the customer sent.');
     const [row] = await query<{ id: number }>(
-      `INSERT INTO cashin_requests (business_id, created_by, number, gcash_name, amount, note, kind)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [businessId, me.id, number, gcashName, amount, note, kind],
+      `INSERT INTO cashin_requests (business_id, created_by, number, gcash_name, amount, note, kind, source, bank_name, account_last4, ref_no)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+      [businessId, me.id, number, gcashName, amount, note, kind, source, bankName, accountLast4, refNo],
     );
+    if (proof) {
+      await query(`INSERT INTO request_proofs (request_id, mime, data) VALUES ($1, $2, decode($3, 'base64'))`, [row.id, proof.mime, proof.base64]);
+    }
+    const who = describeRequest({ source, number, gcashName, bankName, accountLast4 });
     await logActivity(req, me, businessId, {
       action: 'cashin.create',
-      summary: `Sent a ${kind === 'cashout' ? 'cash-out' : 'cash-in'} request · ${prettyNumber(number)}${gcashName ? ` · ${gcashName}` : ''}${amount ? ` · ${peso(amount)}` : ''}`,
+      summary: `Sent a ${kind === 'cashout' ? (source === 'bank' ? 'bank cash-out' : 'cash-out') : 'cash-in'} request · ${who}${amount ? ` · ${peso(amount)}` : ''}${proof ? ' (with proof photo)' : ''}`,
       targetType: 'cashin',
       targetId: row.id,
     });
@@ -653,7 +685,7 @@ async function route(req: Request): Promise<Response> {
       me.id,
       {
         title: `${kind === 'cashout' ? 'Pa-cash out po!' : 'Cash in po!'}${amount ? ` · ${peso(amount)}` : ''}`,
-        body: `${prettyNumber(number)}${gcashName ? ` · ${gcashName}` : ''} — from ${me.name}`,
+        body: `${source === 'bank' ? 'InstaPay/bank · ' : ''}${who} — from ${me.name}`,
         url: '/?view=cashin',
         tag: `cashin-${row.id}`,
         sticky: true,
@@ -737,6 +769,25 @@ async function route(req: Request): Promise<Response> {
     return json({ ok: true, remindCount });
   }
 
+  if (parts[0] === 'cashin' && parts[2] === 'proof' && m === 'GET') {
+    const me = requireUser(user);
+    const id = Number(parts[1]);
+    const [r] = await query<{ businessId: number; createdBy: number }>(
+      `SELECT business_id AS "businessId", created_by AS "createdBy" FROM cashin_requests WHERE id = $1`,
+      [id],
+    );
+    if (!r || (me.role !== 'superadmin' && r.businessId !== me.businessId)) throw new HttpError(404, 'Not found.');
+    if (me.role === 'tindera' && r.createdBy !== me.id) throw new HttpError(404, 'Not found.');
+    const [img] = await query<{ mime: string; base64: string }>(
+      `SELECT mime, encode(data, 'base64') AS base64 FROM request_proofs WHERE request_id = $1`,
+      [id],
+    );
+    if (!img) throw new HttpError(404, 'No proof photo.');
+    return new Response(Buffer.from(img.base64.replace(/\s+/g, ''), 'base64'), {
+      headers: { 'Content-Type': img.mime, 'Cache-Control': 'private, max-age=31536000, immutable' },
+    });
+  }
+
   if (parts[0] === 'cashin' && parts.length === 2 && m === 'PATCH') {
     const me = requireUser(user);
     const id = Number(parts[1]);
@@ -748,9 +799,17 @@ async function route(req: Request): Promise<Response> {
       gcashName: string;
       amount: number | null;
       kind: 'cashin' | 'cashout';
+      source: string;
+      bankName: string;
+      accountLast4: string;
+      refNo: string;
+      note: string;
+      createdByName: string;
     }>(
-      `SELECT business_id AS "businessId", created_by AS "createdBy", status, number, gcash_name AS "gcashName",
-              amount::float8 AS amount, kind FROM cashin_requests WHERE id = $1`,
+      `SELECT c.business_id AS "businessId", c.created_by AS "createdBy", c.status, c.number, c.gcash_name AS "gcashName",
+              c.amount::float8 AS amount, c.kind, c.source, c.bank_name AS "bankName", c.account_last4 AS "accountLast4",
+              c.ref_no AS "refNo", c.note, u.name AS "createdByName"
+         FROM cashin_requests c JOIN users u ON u.id = c.created_by WHERE c.id = $1`,
       [id],
     );
     if (!r || (me.role !== 'superadmin' && r.businessId !== me.businessId)) throw new HttpError(404, 'Request not found.');
@@ -784,6 +843,21 @@ async function route(req: Request): Promise<Response> {
       throw new HttpError(403, 'Only the owner can mark a cash-in as done.');
     }
     if (r.status !== 'pending' && r.status !== 'processing') throw new HttpError(409, `This request is already ${r.status}.`);
+    if (b.status === 'done' && r.kind === 'cashout' && txnId === null && r.amount !== null) {
+      // Cash-out confirmed received: save it as a "Received" transaction so it shows in receipts and
+      // monthly totals, with the customer's proof photo (if any) as its image.
+      const via = r.source === 'bank' ? `${r.bankName || 'bank'}${r.accountLast4 ? ` ••${r.accountLast4}` : ''} (InstaPay/bank)` : 'GCash';
+      const [t] = await query<{ id: number }>(
+        `INSERT INTO transactions (type, amount, ref_no, recipient, phone, txn_date, note, raw_text, created_by, business_id)
+         VALUES ('Received', $1, $2, $3, $4, $5, $6, '', $7, $8) RETURNING id`,
+        [r.amount, r.refNo, r.gcashName, r.number, phNow(), `Cash-out from ${via} · requested by ${r.createdByName}${r.note ? ` · ${r.note}` : ''}`, r.createdBy, r.businessId],
+      );
+      await query(
+        `INSERT INTO receipt_images (txn_id, mime, data) SELECT $1, mime, data FROM request_proofs WHERE request_id = $2`,
+        [t.id, id],
+      );
+      txnId = t.id;
+    }
     await query(
       `UPDATE cashin_requests SET status = $1, handled_by = $2, handled_at = NOW(), txn_id = COALESCE($4, txn_id) WHERE id = $3`,
       [b.status, me.id, id, txnId],

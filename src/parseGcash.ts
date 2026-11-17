@@ -57,7 +57,7 @@ function toNumber(s: string): number | null {
 const MONEY = /(?:₱|PHP|Php|P)?\s?(\d{1,3}(?:[,\s]\d{3})*\.\d{2}|\d+\.\d{2})\b/;
 const MONEY_G = new RegExp(MONEY.source, 'g');
 
-function parseAmount(lines: string[]): number | null {
+export function parseAmount(lines: string[]): number | null {
   // Most specific labels first. The value is on the same line or the next one.
   const labels = [
     /total\s+amount\s+sent/i,

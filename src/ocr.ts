@@ -1,5 +1,5 @@
-import { createWorker, type Worker } from 'tesseract.js';
-import { prepareForOcr } from './image';
+import { createWorker, PSM, type Worker } from 'tesseract.js';
+import { prepareForOcr, type CropBox } from './image';
 
 let workerPromise: Promise<Worker> | null = null;
 let onProgress: ((label: string) => void) | null = null;
@@ -38,7 +38,19 @@ async function resetWorker() {
   }
 }
 
-export async function recognizeText(file: Blob, progress?: (label: string) => void): Promise<string> {
+export interface OcrOptions {
+  /** Only read this part of the image (photo of a phone screen: just the receipt). */
+  crop?: CropBox;
+  /** Grayscale + contrast stretch first (photos with glare / beige backgrounds / cracks). */
+  enhance?: boolean;
+  /**
+   * Read twice with different layout modes and combine the text: one pass as a single block,
+   * one as "sparse text". Noisy photos give different pieces in each, so together they cover more.
+   */
+  multiPass?: boolean;
+}
+
+export async function recognizeText(file: Blob, progress?: (label: string) => void, opts: OcrOptions = {}): Promise<string> {
   onProgress = progress ?? null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -46,9 +58,19 @@ export async function recognizeText(file: Blob, progress?: (label: string) => vo
   });
   try {
     const work = (async () => {
-      const [worker, canvas] = await Promise.all([getWorker(), prepareForOcr(file)]);
-      const { data } = await worker.recognize(canvas);
-      return data.text;
+      const [worker, canvas] = await Promise.all([getWorker(), prepareForOcr(file, opts)]);
+      if (!opts.multiPass) {
+        await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
+        const { data } = await worker.recognize(canvas);
+        return data.text;
+      }
+      const texts: string[] = [];
+      for (const psm of [PSM.SINGLE_BLOCK, PSM.SPARSE_TEXT]) {
+        await worker.setParameters({ tessedit_pageseg_mode: psm });
+        texts.push((await worker.recognize(canvas)).data.text);
+      }
+      await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
+      return texts.join('\n');
     })();
     return await Promise.race([work, timeout]);
   } catch (e) {

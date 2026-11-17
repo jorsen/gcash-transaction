@@ -154,6 +154,16 @@ const SCHEMA = [
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
   `CREATE INDEX IF NOT EXISTS activity_log_business_idx ON activity_log (business_id, id DESC)`,
+  // v8: cash-out from other banks (InstaPay / PESONet) + proof photo of the customer's receipt.
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'gcash'`,
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS bank_name TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS account_last4 TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS ref_no TEXT NOT NULL DEFAULT ''`,
+  `CREATE TABLE IF NOT EXISTS request_proofs (
+    request_id INTEGER PRIMARY KEY REFERENCES cashin_requests(id) ON DELETE CASCADE,
+    mime TEXT NOT NULL,
+    data BYTEA NOT NULL
+  )`,
 ];
 
 /** Creates tables on first use (idempotent), so there is no separate migration step. */
