@@ -8,12 +8,14 @@ self.addEventListener('push', (event) => {
     data = { title: 'GCash Tracker', body: event.data ? event.data.text() : '' };
   }
   event.waitUntil(
-    Promise.all([
-      // Tell any open app window to refresh its lists right away (realtime).
-      self.clients
-        .matchAll({ type: 'window', includeUncontrolled: true })
-        .then((list) => list.forEach((c) => c.postMessage({ type: 'push-received', tag: data.tag }))),
-      self.registration.showNotification(data.title || 'GCash Tracker', {
+    (async () => {
+      const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      // Tell any open app window to refresh its lists right away (realtime + in-app chime).
+      windows.forEach((c) => c.postMessage({ type: 'push-received', tag: data.tag }));
+      const isIos = /iphone|ipad|ipod/i.test(self.navigator.userAgent);
+      const appInFront = windows.some((c) => c.focused && c.visibilityState === 'visible');
+      if (appInFront && !isIos) return; // the open app chimes itself; avoid a double alert
+      await self.registration.showNotification(data.title || 'GCash Tracker', {
         body: data.body || '',
         icon: '/pwa-192x192.png',
         badge: '/pwa-64x64.png',
@@ -21,10 +23,11 @@ self.addEventListener('push', (event) => {
         renotify: Boolean(data.tag),
         data: { url: data.url || '/' },
         requireInteraction: Boolean(data.sticky),
+        silent: false, // play the phone's notification sound
         vibrate: [200, 100, 200],
         timestamp: Date.now(),
-      }),
-    ]),
+      });
+    })(),
   );
 });
 

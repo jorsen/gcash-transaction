@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api, type CashinRequest, type User } from './api';
 import { peso } from './format';
+import { markLocalAction } from './sound';
 import { Icon, SkeletonRows, useUi } from './ui';
 
 /** "09171234567" -> "0917 123 4567" */
@@ -163,6 +164,7 @@ export function CashIn({
     setFormError('');
     setSending(true);
     try {
+      markLocalAction();
       await api.addCashin({ ...form, number: digits, businessId });
       ui.toast(`Sent to the owner: ${form.number}`);
       setForm({ number: '', gcashName: '', amount: '', note: '' });
@@ -199,6 +201,7 @@ export function CashIn({
       return;
     setBusyId(r.id);
     try {
+      markLocalAction();
       await api.updateCashin(r.id, status);
       ui.toast(status === 'done' ? 'Marked as sent' : 'Request cancelled', status === 'done' ? 'success' : 'info');
       await load();

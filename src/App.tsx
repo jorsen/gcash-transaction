@@ -9,6 +9,7 @@ import { useLiveStamp } from './live';
 import { Login } from './Login';
 import { disablePush, enablePush, ensurePushSubscription, syncPushSubscription, unlinkPushSubscription, type PushState } from './push';
 import { Review } from './Review';
+import { playChime, recentLocalAction, setSoundEnabled, soundEnabled } from './sound';
 import { Staff } from './Staff';
 import { ActionSheet, Avatar, Banner, Icon, SkeletonRows, useUi } from './ui';
 
@@ -271,14 +272,42 @@ function Home({
   // Realtime: badge count, and reload the receipts list when someone adds/edits/deletes one.
   const live = useLiveStamp(scopeId);
   const lastReceipts = useRef<string | null>(null);
+  const lastPending = useRef<number | null>(null);
   useEffect(() => {
     if (!live) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing from the live stamp
     setPendingCashin(live.pending);
+    const receiptCount = Number(live.receipts.split('|')[1] ?? 0);
+    const prevReceiptCount = lastReceipts.current === null ? null : Number(lastReceipts.current.split('|')[1] ?? 0);
     if (lastReceipts.current !== null && lastReceipts.current !== live.receipts) load(true);
+
+    // Sounds for things other people did (never for your own actions).
+    if (lastPending.current !== null && !recentLocalAction()) {
+      if (isOwner && live.pending > lastPending.current) {
+        playChime('cashin');
+        ui.toast(live.pending - lastPending.current > 1 ? `${live.pending - lastPending.current} new cash-in requests` : 'New cash-in request', 'info');
+      } else if (!isOwner && live.pending < lastPending.current) {
+        playChime('done');
+        ui.toast('The owner handled your cash-in request', 'info');
+      }
+    }
+    if (isOwner && prevReceiptCount !== null && receiptCount > prevReceiptCount && !recentLocalAction()) {
+      playChime('receipt');
+      ui.toast('New receipt uploaded', 'info');
+    }
     lastReceipts.current = live.receipts;
+    lastPending.current = live.pending;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live]);
+
+  const [soundOn, setSoundOn] = useState(soundEnabled);
+  const toggleSound = () => {
+    const next = !soundOn;
+    setSoundEnabled(next);
+    setSoundOn(next);
+    if (next) playChime('cashin', true);
+    ui.toast(next ? 'Sounds on' : 'Sounds off', 'info');
+  };
 
   useEffect(() => {
     if (isOwner) api.users(scopeId).then((r) => setStaff(r.users)).catch(() => undefined);
@@ -325,6 +354,11 @@ function Home({
           <p>
             <strong>Windows PC:</strong> Chrome/Edge settings → System → turn on <em>Continue running background apps when closed</em>. Turn off
             Focus Assist / Do Not Disturb.
+          </p>
+          <p>
+            <strong>Sound:</strong> while the app is open it plays its own chime. When it's closed, your phone plays its notification
+            sound. To make it louder or different on Android: long-press a GCash Tracker notification → <em>Settings</em> → <em>Sound</em>
+            (or Settings → Apps → Chrome → Notifications → gcash-transaction.vercel.app). Make sure the phone isn't on silent / Do Not Disturb.
           </p>
           <p>Notifications wait up to 24 hours if the phone is off or offline.</p>
         </div>
@@ -616,6 +650,12 @@ function Home({
             ...(pushState && pushState !== 'unsupported' && pushState !== 'needs-install' && pushState !== 'denied'
               ? [{ icon: 'bell' as const, label: pushState === 'on' ? 'Turn off notifications' : 'Turn on notifications', onClick: togglePush }]
               : []),
+            {
+              icon: 'bell' as const,
+              label: soundOn ? 'Sounds: On' : 'Sounds: Off',
+              hint: soundOn ? 'Chime for new cash-ins and receipts while the app is open' : 'Tap to turn chimes back on',
+              onClick: toggleSound,
+            },
             ...(!isSuper ? [{ icon: 'bell' as const, label: 'Notification help', hint: 'If notifications don’t arrive when the app is closed', onClick: notificationHelp }] : []),
             ...(!isSuper
               ? [

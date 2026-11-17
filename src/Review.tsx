@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'r
 import { api, blobToPayload, imageUrl, type TxnPayload, type User } from './api';
 import { BlobImage } from './BlobImage';
 import { peso, prettyDate } from './format';
+import { markLocalAction } from './sound';
 import { Icon, useUi } from './ui';
 import { compressForStorage } from './image';
 import { recognizeText } from './ocr';
@@ -160,6 +161,7 @@ export function Review({
         payload.image = null;
       }
       if (businessId) payload.businessId = businessId;
+      markLocalAction();
       if (id !== undefined) await api.updateTransaction(id, payload);
       else await api.addTransaction(payload);
       ui.toast(id !== undefined ? 'Changes saved' : `Saved ${peso(payload.amount)} ${payload.type}`);
@@ -210,6 +212,7 @@ export function Review({
     )
       return;
     try {
+      markLocalAction();
       await api.deleteTransaction(id);
       ui.toast('Transaction deleted', 'info');
       onDone();

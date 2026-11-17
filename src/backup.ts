@@ -1,5 +1,6 @@
 import { api, blobToPayload, type Txn } from './api';
 import { deleteLocal, listLocal } from './db';
+import { markLocalAction } from './sound';
 
 function download(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -41,6 +42,7 @@ export async function uploadLocalRecords(onProgress: (done: number, total: numbe
   const rows = await listLocal();
   let done = 0;
   for (const r of rows) {
+    markLocalAction();
     await api.addTransaction({
       type: r.type,
       amount: r.amount,
