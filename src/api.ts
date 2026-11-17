@@ -83,7 +83,10 @@ export interface CashinRequest {
   gcashName: string;
   amount: number | null;
   note: string;
-  status: 'pending' | 'done' | 'cancelled';
+  /** pending (blue) -> processing (yellow, owner copied the number) -> done (green) / cancelled */
+  status: 'pending' | 'processing' | 'done' | 'cancelled';
+  processingAt: string | null;
+  processingByName: string | null;
   createdAt: string;
   handledAt: string | null;
   createdBy: number;
@@ -176,7 +179,7 @@ export const api = {
       'GET',
       `cashin/lookup?number=${encodeURIComponent(number)}${businessId ? `&businessId=${businessId}` : ''}`,
     ),
-  updateCashin: (id: number, status: 'done' | 'cancelled', txnId?: number) =>
+  updateCashin: (id: number, status: 'processing' | 'done' | 'cancelled', txnId?: number) =>
     request<{ ok: true }>('PATCH', `cashin/${id}`, { status, txnId }),
 
   checkRef: (ref: string, excludeId?: number, businessId?: number | null) =>

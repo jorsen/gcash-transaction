@@ -501,17 +501,19 @@ async function route(req: Request): Promise<Response> {
       where += ` AND c.created_by = $${params.length}`;
     }
     const [{ pending }] = await query<{ pending: number }>(
-      `SELECT COUNT(*)::int AS pending FROM cashin_requests c WHERE ${where} AND c.status = 'pending'`,
+      `SELECT COUNT(*)::int AS pending FROM cashin_requests c WHERE ${where} AND c.status IN ('pending', 'processing')`,
       params,
     );
-    if (url.searchParams.get('status') === 'pending') where += ` AND c.status = 'pending'`;
+    if (url.searchParams.get('status') === 'pending') where += ` AND c.status IN ('pending', 'processing')`;
     const items = await query(
       `SELECT c.id, c.number, c.gcash_name AS "gcashName", c.amount::float8 AS amount, c.note, c.status,
               c.created_at AS "createdAt", c.handled_at AS "handledAt", c.created_by AS "createdBy",
-              cu.name AS "createdByName", hu.name AS "handledByName", c.kind, c.txn_id AS "txnId"
+              cu.name AS "createdByName", hu.name AS "handledByName", c.kind, c.txn_id AS "txnId",
+              c.processing_at AS "processingAt", pu.name AS "processingByName"
          FROM cashin_requests c JOIN users cu ON cu.id = c.created_by LEFT JOIN users hu ON hu.id = c.handled_by
+         LEFT JOIN users pu ON pu.id = c.processing_by
         WHERE ${where}
-        ORDER BY (c.status = 'pending') DESC, c.created_at DESC LIMIT 200`,
+        ORDER BY (c.status IN ('pending', 'processing')) DESC, c.created_at DESC LIMIT 200`,
       params,
     );
     return json({ items, pending });
@@ -601,8 +603,16 @@ async function route(req: Request): Promise<Response> {
       [id],
     );
     if (!r || (me.role !== 'superadmin' && r.businessId !== me.businessId)) throw new HttpError(404, 'Request not found.');
-    const b = await body<{ status: 'done' | 'cancelled'; txnId?: number }>(req);
-    if (b.status !== 'done' && b.status !== 'cancelled') throw new HttpError(400, 'Invalid status.');
+    const b = await body<{ status: 'processing' | 'done' | 'cancelled'; txnId?: number }>(req);
+    if (!['processing', 'done', 'cancelled'].includes(b.status)) throw new HttpError(400, 'Invalid status.');
+    if (b.status === 'processing') {
+      // Owner copied the number and is sending it in GCash. Yellow "Processing" for everyone.
+      if (me.role === 'tindera') throw new HttpError(403, 'Only the owner can process a request.');
+      if (r.status === 'processing') return json({ ok: true });
+      if (r.status !== 'pending') throw new HttpError(409, `This request is already ${r.status}.`);
+      await query(`UPDATE cashin_requests SET status = 'processing', processing_at = NOW(), processing_by = $1 WHERE id = $2`, [me.id, id]);
+      return json({ ok: true });
+    }
     let txnId: number | null = null;
     if (b.txnId !== undefined && b.txnId !== null) {
       // The GCash receipt being attached must belong to the same business.
@@ -616,7 +626,7 @@ async function route(req: Request): Promise<Response> {
     if (me.role === 'tindera' && (r.createdBy !== me.id || b.status !== 'cancelled')) {
       throw new HttpError(403, 'Only the owner can mark a cash-in as done.');
     }
-    if (r.status !== 'pending') throw new HttpError(409, `This request is already ${r.status}.`);
+    if (r.status !== 'pending' && r.status !== 'processing') throw new HttpError(409, `This request is already ${r.status}.`);
     await query(
       `UPDATE cashin_requests SET status = $1, handled_by = $2, handled_at = NOW(), txn_id = COALESCE($4, txn_id) WHERE id = $3`,
       [b.status, me.id, id, txnId],
@@ -652,11 +662,11 @@ async function route(req: Request): Promise<Response> {
     const [r] = await query<{ t: string | null; tc: number; c: string | null; cc: number; pending: number; latestKind: string | null }>(
       `SELECT (SELECT MAX(updated_at)::text FROM transactions WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS t,
               (SELECT COUNT(*)::int FROM transactions WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS tc,
-              (SELECT MAX(GREATEST(created_at, COALESCE(handled_at, created_at)))::text FROM cashin_requests
+              (SELECT MAX(GREATEST(created_at, COALESCE(handled_at, created_at), COALESCE(processing_at, created_at)))::text FROM cashin_requests
                 WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS c,
               (SELECT COUNT(*)::int FROM cashin_requests WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS cc,
               (SELECT COUNT(*)::int FROM cashin_requests
-                WHERE business_id = $1 AND status = 'pending' AND ($2::int IS NULL OR created_by = $2)) AS pending,
+                WHERE business_id = $1 AND status IN ('pending', 'processing') AND ($2::int IS NULL OR created_by = $2)) AS pending,
               (SELECT kind FROM cashin_requests
                 WHERE business_id = $1 AND status = 'pending' AND ($2::int IS NULL OR created_by = $2)
                 ORDER BY created_at DESC LIMIT 1) AS "latestKind"`,

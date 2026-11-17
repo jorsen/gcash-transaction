@@ -426,3 +426,21 @@ input.mono { text-transform: uppercase; }
 
 .content.read-only input, .content.read-only textarea, .content.read-only .chip, .content.read-only .pill-btn { pointer-events: none; }
 .content.read-only .image-actions { display: none; }
+
+/* ---------- request status colors: Waiting (blue) -> Processing (yellow) -> Sent (green) ---------- */
+:root { --amber: #f5a300; --amber-text: #8a5a00; --amber-soft: #fff5d6; }
+@media (prefers-color-scheme: dark) { :root { --amber: #ffc233; --amber-text: #ffd56b; --amber-soft: #3a2c08; } }
+.cashin-card { padding-top: 12px; }
+.cashin-card .kind-badge { margin-right: 84px; }
+.status-pill { position: absolute; top: 12px; right: 12px; font-size: 11px; font-weight: 800; border-radius: 999px; padding: 3px 10px; letter-spacing: 0.02em; }
+.status-pill.pending { background: var(--blue-soft); color: var(--blue); }
+.status-pill.processing { background: var(--amber); color: #3d2800; }
+.status-pill.done { background: var(--green); color: #fff; }
+.status-pill.cancelled { background: var(--card-2); color: var(--muted); }
+.cashin-card.pending { border-left-color: var(--blue); }
+.cashin-card.processing { border-left-color: var(--amber); background: color-mix(in srgb, var(--amber-soft) 55%, var(--card)); }
+.cashin-card.done { border-left-color: var(--green); }
+.cashin-card:not(.pending) .cashin-amount { margin-right: 0; }
+.process-btn { flex: 1 1 0; background: var(--amber); color: #3d2800; box-shadow: 0 2px 8px color-mix(in srgb, var(--amber) 45%, transparent); }
+.copy-again { flex: 0 0 48px !important; padding: 0 !important; }
+.processing-hint { color: var(--amber-text); font-weight: 650; }

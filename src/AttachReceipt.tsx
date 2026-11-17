@@ -20,6 +20,8 @@ const letters = (s: string) => s.toUpperCase().replace(/[^A-Z]/g, '');
 function matchScore(r: CashinRequest, p: ParsedReceipt | null) {
   if (!p) return 0;
   let score = 0;
+  // The owner is usually attaching the receipt for the one they're processing right now.
+  if (r.status === 'processing') score += 2;
   if (p.amount !== null && r.amount !== null && Math.abs(p.amount - r.amount) < 0.005) score += 5;
   const phone = p.phone.replace(/\D/g, '');
   if (phone.length >= 4 && r.number.endsWith(phone.slice(-4))) score += 3;
@@ -65,7 +67,7 @@ export function AttachReceipt({
   useEffect(() => {
     api
       .cashin({ businessId, pendingOnly: true })
-      .then((r) => setRequests(r.items.filter((x) => x.status === 'pending')))
+      .then((r) => setRequests(r.items.filter((x) => x.status === 'pending' || x.status === 'processing')))
       .catch((e) => {
         setRequests([]);
         ui.toast(e instanceof Error ? e.message : String(e), 'error');

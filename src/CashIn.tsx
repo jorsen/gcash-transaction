@@ -186,22 +186,42 @@ export function CashIn({
     }
   };
 
+  const isOpen = (r: CashinRequest) => r.status === 'pending' || r.status === 'processing';
+
   const copy = async (r: CashinRequest) => {
-    if (await copyText(r.number)) {
-      setCopiedId(r.id);
-      ui.toast(`${prettyNumber(r.number)} copied. Paste it in GCash.`);
-      setTimeout(() => setCopiedId((c) => (c === r.id ? null : c)), 2500);
-    } else {
+    if (!(await copyText(r.number))) {
       ui.info({ title: 'Copy failed', message: `The number is ${prettyNumber(r.number)}` });
+      return;
     }
+    setCopiedId(r.id);
+    setTimeout(() => setCopiedId((c) => (c === r.id ? null : c)), 2500);
+    // Owner copying a waiting cash-in = they're sending it now: move it to Processing (yellow).
+    if (isManager && r.kind === 'cashin' && r.status === 'pending') {
+      ui.toast(`${prettyNumber(r.number)} copied · Processing. Paste it in GCash.`);
+      try {
+        markLocalAction();
+        await api.updateCashin(r.id, 'processing');
+        await load();
+      } catch (err) {
+        ui.toast(err instanceof Error ? err.message : String(err), 'error');
+      }
+    } else {
+      ui.toast(`${prettyNumber(r.number)} copied. Paste it in GCash.`);
+    }
+  };
+
+  /** Process = upload the GCash receipt; the attach screen marks the request Sent. */
+  const processReceipt = (r: CashinRequest) => {
+    attachFor.current = r.id;
+    attachInput.current?.click();
   };
 
   const update = async (r: CashinRequest, status: 'done' | 'cancelled') => {
     if (
       status === 'cancelled' &&
       !(await ui.confirm({
-        title: 'Cancel this cash-in?',
-        message: `${prettyNumber(r.number)} · ${r.gcashName.toUpperCase()}${r.amount !== null ? ` · ${peso(r.amount)}` : ''}`,
+        title: `Cancel this ${r.kind === 'cashout' ? 'cash-out' : 'cash-in'}?`,
+        message: `${prettyNumber(r.number)}${r.gcashName ? ` · ${r.gcashName.toUpperCase()}` : ''}${r.amount !== null ? ` · ${peso(r.amount)}` : ''}`,
         confirmText: 'Cancel request',
         cancelText: 'Keep',
         danger: true,
@@ -221,13 +241,17 @@ export function CashIn({
     }
   };
 
-  const pending = items.filter((r) => r.status === 'pending');
-  const finished = items.filter((r) => r.status !== 'pending');
+  const pending = items.filter(isOpen);
+  const finished = items.filter((r) => !isOpen(r));
 
   const doneWord = (r: CashinRequest) => (r.kind === 'cashout' ? 'Received' : 'Sent');
+  const statusLabel = (r: CashinRequest) =>
+    r.status === 'pending' ? 'Waiting' : r.status === 'processing' ? 'Processing' : r.status === 'done' ? doneWord(r) : 'Cancelled';
+
   const card = (r: CashinRequest) => (
     <li key={r.id} className={`cashin-card ${r.status} kind-${r.kind}`}>
       <span className={`kind-badge ${r.kind}`}>{r.kind === 'cashout' ? 'Cash out' : 'Cash in'}</span>
+      <span className={`status-pill ${r.status}`}>{statusLabel(r)}</span>
       <div className="cashin-top">
         <span className="cashin-number">{prettyNumber(r.number)}</span>
         {r.amount !== null && <span className="cashin-amount">{peso(r.amount)}</span>}
@@ -237,7 +261,8 @@ export function CashIn({
       <div className="row-sub">
         {isManager ? `From ${r.createdByName} · ` : ''}
         {timeAgo(r.createdAt)}
-        {r.status !== 'pending' &&
+        {r.status === 'processing' && ` · Processing${r.processingByName ? ` by ${r.processingByName}` : ''}${r.processingAt ? ` ${timeAgo(r.processingAt)}` : ''}`}
+        {!isOpen(r) &&
           ` · ${r.status === 'done' ? doneWord(r) : 'Cancelled'}${r.handledByName ? ` by ${r.handledByName}` : ''}${r.handledAt ? ` ${timeAgo(r.handledAt)}` : ''}`}
       </div>
       {r.status === 'done' && r.txnId && (
@@ -245,53 +270,51 @@ export function CashIn({
           <Icon name="receipt" size={16} /> View GCash receipt
         </button>
       )}
-      {r.status === 'pending' && (
+
+      {isOpen(r) && (
         <>
-        <div className="cashin-actions">
-          <button className={`btn primary copy-btn ${copiedId === r.id ? 'copied' : ''}`} onClick={() => copy(r)}>
-            <Icon name={copiedId === r.id ? 'check' : 'copy'} size={18} />
-            {copiedId === r.id ? 'Copied' : 'Copy number'}
-          </button>
-          {isManager && r.kind === 'cashin' && (
-            <button
-              className="btn done-btn"
-              onClick={() => {
-                attachFor.current = r.id;
-                attachInput.current?.click();
-              }}
-              disabled={busyId === r.id}
-            >
-              <Icon name="image" size={18} /> Upload receipt
-            </button>
+          <div className="cashin-actions">
+            {/* Owner, cash-in, processing: yellow Process (upload receipt -> Sent) + copy again */}
+            {isManager && r.kind === 'cashin' && r.status === 'processing' ? (
+              <>
+                <button className="btn secondary copy-again" onClick={() => copy(r)} aria-label="Copy number again">
+                  <Icon name={copiedId === r.id ? 'check' : 'copy'} size={18} />
+                </button>
+                <button className="btn process-btn" onClick={() => processReceipt(r)} disabled={busyId === r.id}>
+                  <Icon name="image" size={18} /> Process
+                </button>
+              </>
+            ) : (
+              <button className={`btn primary copy-btn ${copiedId === r.id ? 'copied' : ''}`} onClick={() => copy(r)}>
+                <Icon name={copiedId === r.id ? 'check' : 'copy'} size={18} />
+                {copiedId === r.id ? 'Copied' : 'Copy number'}
+              </button>
+            )}
+            {isManager && r.kind === 'cashout' && (
+              <button className="btn done-btn" onClick={() => update(r, 'done')} disabled={busyId === r.id}>
+                <Icon name="check" size={18} /> {doneWord(r)}
+              </button>
+            )}
+            {(isManager || r.createdBy === user.id) && (
+              <button className="link danger-text" onClick={() => update(r, 'cancelled')} disabled={busyId === r.id}>
+                Cancel
+              </button>
+            )}
+          </div>
+          {isManager && r.kind === 'cashin' && r.status === 'pending' && (
+            <span className="hint">Copy the number and send it in GCash. It turns yellow (Processing).</span>
           )}
+          {isManager && r.kind === 'cashin' && r.status === 'processing' && (
+            <span className="hint processing-hint">Sent it in GCash? Tap Process and upload the GCash receipt. It turns green (Sent).</span>
+          )}
+          {!isManager && r.status === 'processing' && <span className="hint processing-hint">The owner is sending it now…</span>}
           {isManager && r.kind === 'cashout' && (
-            <button className="btn done-btn" onClick={() => update(r, 'done')} disabled={busyId === r.id}>
-              <Icon name="check" size={18} /> {doneWord(r)}
+            <button className="pill-btn attach-btn" onClick={() => processReceipt(r)}>
+              <Icon name="image" size={16} /> Attach GCash receipt &amp; mark {doneWord(r).toLowerCase()}
             </button>
           )}
-          {(isManager || r.createdBy === user.id) && (
-            <button className="link danger-text" onClick={() => update(r, 'cancelled')} disabled={busyId === r.id}>
-              Cancel
-            </button>
-          )}
-        </div>
-        {isManager && r.kind === 'cashin' && (
-          <span className="hint">Send it in GCash, then upload the GCash receipt to mark it sent.</span>
-        )}
-        {isManager && r.kind === 'cashout' && (
-          <button
-            className="pill-btn attach-btn"
-            onClick={() => {
-              attachFor.current = r.id;
-              attachInput.current?.click();
-            }}
-          >
-            <Icon name="image" size={16} /> Attach GCash receipt &amp; mark {doneWord(r).toLowerCase()}
-          </button>
-        )}
         </>
       )}
-      {r.status !== 'pending' && <span className={`status-pill ${r.status}`}>{r.status === 'done' ? doneWord(r) : 'Cancelled'}</span>}
     </li>
   );
 

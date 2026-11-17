@@ -217,9 +217,23 @@ function Home({
   const [localCount, setLocalCount] = useState(0);
   const [uploading, setUploading] = useState('');
   const [installEvt, setInstallEvt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [tab, setTab] = useState<'receipts' | 'cashin'>(() =>
-    new URLSearchParams(location.search).get('view') === 'cashin' ? 'cashin' : 'receipts',
-  );
+  // Remember the tab while other screens (receipt, attach, staff) are open, so Back returns to it.
+  const [tab, setTabState] = useState<'receipts' | 'cashin'>(() => {
+    if (new URLSearchParams(location.search).get('view') === 'cashin') return 'cashin';
+    try {
+      return sessionStorage.getItem('home-tab') === 'cashin' ? 'cashin' : 'receipts';
+    } catch {
+      return 'receipts';
+    }
+  });
+  const setTab = (t: 'receipts' | 'cashin') => {
+    setTabState(t);
+    try {
+      sessionStorage.setItem('home-tab', t);
+    } catch {
+      // ignore
+    }
+  };
   const [pendingCashin, setPendingCashin] = useState(0);
   const [pushState, setPushState] = useState<PushState | null>(null);
   const [pushBusy, setPushBusy] = useState(false);

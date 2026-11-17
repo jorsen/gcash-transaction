@@ -120,6 +120,22 @@ const SCHEMA = [
   // v4: cash-out requests, and the GCash receipt attached when the owner completes a request.
   `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'cashin'`,
   `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS txn_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL`,
+  // v5: "processing" step (owner copied the number and is sending it in GCash).
+  // One statement under an advisory lock so concurrent cold starts can't race on the constraint.
+  `DO $$
+  BEGIN
+    PERFORM pg_advisory_xact_lock(727275);
+    ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS processing_at TIMESTAMPTZ;
+    ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS processing_by INTEGER REFERENCES users(id);
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+       WHERE conname = 'cashin_requests_status_check' AND pg_get_constraintdef(oid) LIKE '%processing%'
+    ) THEN
+      ALTER TABLE cashin_requests DROP CONSTRAINT IF EXISTS cashin_requests_status_check;
+      ALTER TABLE cashin_requests ADD CONSTRAINT cashin_requests_status_check
+        CHECK (status IN ('pending', 'processing', 'done', 'cancelled'));
+    END IF;
+  END $$`,
 ];
 
 /** Creates tables on first use (idempotent), so there is no separate migration step. */
