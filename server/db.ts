@@ -164,6 +164,8 @@ const SCHEMA = [
     mime TEXT NOT NULL,
     data BYTEA NOT NULL
   )`,
+  // v9: deleted staff. Kept (their past receipts/requests still show their name) but hidden and unable to log in.
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
 ];
 
 /** Creates tables on first use (idempotent), so there is no separate migration step. */

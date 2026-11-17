@@ -176,6 +176,7 @@ export const api = {
     request<{ user: StaffUser }>('POST', 'users', b),
   updateUser: (id: number, b: { name?: string; password?: string; active?: boolean }) =>
     request<{ ok: true }>('PATCH', `users/${id}`, b),
+  deleteUser: (id: number) => request<{ ok: true }>('DELETE', `users/${id}`),
 
   transactions: (q: { month?: string; search?: string; userId?: number | null; businessId?: number | null }) => {
     const p = new URLSearchParams();

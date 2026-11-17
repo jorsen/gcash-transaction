@@ -106,6 +106,26 @@ export function Staff({
     }
   };
 
+  const remove = async (u: StaffUser) => {
+    if (
+      !(await ui.confirm({
+        title: `Delete ${u.name}?`,
+        message: `@${u.username} will be logged out and removed from your staff. Their ${u.txnCount} saved receipt${u.txnCount === 1 ? '' : 's'} and past requests are kept. This can't be undone.`,
+        confirmText: 'Delete',
+        cancelText: 'Keep',
+        danger: true,
+      }))
+    )
+      return;
+    try {
+      await api.deleteUser(u.id);
+      ui.toast(`${u.name} deleted`, 'info');
+      load();
+    } catch (err) {
+      ui.toast(err instanceof Error ? err.message : String(err), 'error');
+    }
+  };
+
   return (
     <div className="page">
       <header className="appbar">
@@ -148,6 +168,11 @@ export function Staff({
                   {u.id !== me.id && (
                     <button className={`pill-btn ${u.active ? 'danger' : ''}`} onClick={() => toggleActive(u)}>
                       {u.active ? 'Deactivate' : 'Activate'}
+                    </button>
+                  )}
+                  {u.id !== me.id && (
+                    <button className="pill-btn danger" onClick={() => remove(u)}>
+                      <Icon name="trash" size={16} /> Delete
                     </button>
                   )}
                 </div>

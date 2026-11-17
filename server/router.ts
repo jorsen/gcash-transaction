@@ -306,7 +306,7 @@ async function route(req: Request): Promise<Response> {
       `SELECT bz.id, bz.name, bz.active, bz.created_at AS "createdAt",
               COALESCE((SELECT string_agg(o.name, ', ' ORDER BY o.id) FROM users o
                          WHERE o.business_id = bz.id AND o.role = 'owner'), '') AS "owners",
-              (SELECT COUNT(*)::int FROM users s WHERE s.business_id = bz.id AND s.role = 'tindera') AS "tinderaCount",
+              (SELECT COUNT(*)::int FROM users s WHERE s.business_id = bz.id AND s.role = 'tindera' AND s.deleted_at IS NULL) AS "tinderaCount",
               (SELECT COUNT(*)::int FROM transactions t WHERE t.business_id = bz.id) AS "txnCount"
          FROM businesses bz ORDER BY bz.active DESC, bz.name`,
     );
@@ -368,7 +368,7 @@ async function route(req: Request): Promise<Response> {
               COUNT(t.id)::int AS "txnCount",
               (SELECT COUNT(*)::int FROM push_subscriptions p WHERE p.user_id = u.id) AS "pushDevices"
          FROM users u LEFT JOIN transactions t ON t.created_by = u.id
-        WHERE u.business_id = $1
+        WHERE u.business_id = $1 AND u.deleted_at IS NULL
         GROUP BY u.id ORDER BY (u.role = 'owner') DESC, u.name`,
       [businessId],
     );
@@ -437,6 +437,34 @@ async function route(req: Request): Promise<Response> {
         targetId: id,
       });
     }
+    return json({ ok: true });
+  }
+
+  // Delete a staff account. Soft delete: their receipts and requests stay (still showing their name),
+  // the account disappears from the staff list, can't log in, and the username can be used again.
+  if (parts[0] === 'users' && parts.length === 2 && m === 'DELETE') {
+    const me = requireManager(user);
+    const id = Number(parts[1]);
+    const [target] = await query<{ role: Role; businessId: number | null; name: string; username: string }>(
+      `SELECT role, business_id AS "businessId", name, username FROM users WHERE id = $1 AND deleted_at IS NULL`,
+      [id],
+    );
+    if (!target || (me.role === 'owner' && target.businessId !== me.businessId)) throw new HttpError(404, 'User not found.');
+    if (id === me.id) throw new HttpError(400, "You can't delete your own account.");
+    if (target.role === 'superadmin') throw new HttpError(403, 'Not allowed.');
+    if (target.role === 'owner' && me.role !== 'superadmin') throw new HttpError(403, 'Only the super admin can delete owners.');
+    await query(
+      `UPDATE users SET deleted_at = NOW(), active = FALSE, username = 'deleted-' || id || '-' || username WHERE id = $1`,
+      [id],
+    );
+    await endSessionsForUser(id);
+    await query(`DELETE FROM push_subscriptions WHERE user_id = $1`, [id]);
+    await logActivity(req, me, target.businessId, {
+      action: 'staff.delete',
+      summary: `Deleted ${target.role === 'owner' ? 'owner' : 'tindera'} ${target.name} (@${target.username})`,
+      targetType: 'user',
+      targetId: id,
+    });
     return json({ ok: true });
   }
 
