@@ -144,7 +144,8 @@ export function CashIn({
 }) {
   const ui = useUi();
   const isManager = user.role !== 'tindera';
-  const canCreate = user.role !== 'superadmin';
+  // Only tinderas create requests; owners just handle them.
+  const canCreate = user.role === 'tindera';
   // Tinderas mainly create requests; owners mainly handle them, so their form starts collapsed.
   const [formOpen, setFormOpen] = useState(!isManager);
   const [view, setView] = useState<'waiting' | 'finished'>('waiting');
