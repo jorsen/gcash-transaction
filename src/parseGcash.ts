@@ -124,6 +124,25 @@ function parseRefNo(text: string): string {
   return g ? g[1].replace(/\s+/g, '') : '';
 }
 
+/** How many digits at the end of a reference number are kept for cash-out / payment requests. */
+export const REF_TAIL = 5;
+
+/**
+ * Just the last 5 digits of the GCash reference number. Much easier to read on a blurry photo than all
+ * 13: the full number if it reads, else the digits right after "Ref No.", else the 6-digit last group
+ * of GCash's "1234 567 890123" grouping (e.g. "391 768303" -> "68303").
+ */
+export function parseRefTail(text: string): string {
+  const full = parseRefNo(text);
+  if (full.length >= REF_TAIL) return full.slice(-REF_TAIL);
+  const label = text.match(/ref(?:erence)?\.?\s*(?:no|number|#)?\.?\s*:?\s*([0-9][0-9 ]*[0-9])/i);
+  const after = label?.[1].replace(/\s+/g, '') ?? '';
+  if (after.length >= 6) return after.slice(-REF_TAIL);
+  // The group before it may be garbled ("47301 768303"), so any 3–6 digits before the 6 are accepted.
+  const group = text.match(/\b\d{3,6}\s\d{6}\b/);
+  return group ? group[0].slice(-REF_TAIL) : '';
+}
+
 function parseDate(text: string): string {
   // "Nov 17, 2026 5:36 PM" / "Nov 17, 2026, 05:36 PM" / "November 17 2026 5:36PM"
   const m = text.match(

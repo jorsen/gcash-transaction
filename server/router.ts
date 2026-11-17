@@ -1,4 +1,4 @@
-import { normalizeMaskedName, TXN_TYPES } from '../src/parseGcash.js';
+import { normalizeMaskedName, REF_TAIL, TXN_TYPES } from '../src/parseGcash.js';
 import {
   createSession,
   currentUser,
@@ -718,22 +718,11 @@ async function route(req: Request): Promise<Response> {
     const number = kind !== 'cashin' && !String(b.number ?? '').trim() ? '' : cleanMobile(b.number);
     const bankName = source === 'bank' ? String(b.bankName ?? '').trim().slice(0, 60) : '';
     const accountLast4 = source === 'bank' ? String(b.accountLast4 ?? '').replace(/\D/g, '').slice(-4) : '';
-    const refNo = String(b.refNo ?? '').replace(/\s+/g, '').toUpperCase().slice(0, 40);
+    // Cash-out / payment keep only the last 5 characters of the reference number (what a photo reliably shows).
+    const refNo = String(b.refNo ?? '').replace(/\s+/g, '').toUpperCase().slice(-REF_TAIL);
     if (source === 'bank' && !bankName) throw new HttpError(400, 'Enter the bank the customer sent from.');
     const proof = cleanImage(b.proof);
     if (kind !== 'cashin' && !proof) throw new HttpError(400, "Scan the customer's receipt first.");
-    // The same receipt can't be used twice (e.g. an old screenshot shown again).
-    if (kind !== 'cashin' && refNo) {
-      const [dup] = await query<{ at: string }>(
-        `SELECT to_char(created_at AT TIME ZONE 'Asia/Manila', 'Mon DD, HH12:MI AM') AS at FROM cashin_requests
-          WHERE business_id = $1 AND upper(ref_no) = $2 AND status <> 'cancelled'
-         UNION ALL
-         SELECT txn_date FROM transactions WHERE business_id = $1 AND upper(ref_no) = $2
-         LIMIT 1`,
-        [businessId, refNo],
-      );
-      if (dup) throw new HttpError(409, `This receipt (Ref ${refNo}) was already used (${dup.at}). Ask the customer for their new receipt.`);
-    }
     // Typed asterisks / OCR junk become GCash-style dots: "JU** DE*A C." -> "JU•• DE•A C."
     const gcashName = normalizeMaskedName(String(b.gcashName ?? '')).toUpperCase();
     // Cash-in needs the receiver's GCash name to check before sending; for cash-out it's optional.
@@ -747,6 +736,19 @@ async function route(req: Request): Promise<Response> {
       throw new HttpError(400, kind === 'cashin' ? 'Enter the amount to cash in.' : 'Enter the amount the customer sent.');
     }
     amount = Math.round(amount * 100) / 100;
+    // The same receipt can't be used twice (e.g. an old screenshot shown again): same last 5 ref digits
+    // AND same amount (5 digits alone can repeat between different receipts).
+    if (kind !== 'cashin' && refNo.length === REF_TAIL) {
+      const [dup] = await query<{ at: string }>(
+        `SELECT to_char(created_at AT TIME ZONE 'Asia/Manila', 'Mon DD, HH12:MI AM') AS at FROM cashin_requests
+          WHERE business_id = $1 AND right(upper(ref_no), 5) = $2 AND amount = $3 AND status <> 'cancelled'
+         UNION ALL
+         SELECT txn_date FROM transactions WHERE business_id = $1 AND right(upper(ref_no), 5) = $2 AND amount = $3
+         LIMIT 1`,
+        [businessId, refNo, amount],
+      );
+      if (dup) throw new HttpError(409, `This receipt (Ref …${refNo}) was already used (${dup.at}). Ask the customer for their new receipt.`);
+    }
     const note = String(b.note ?? '').trim().slice(0, 500);
     // Best-effort details read from the receipt (OCR): never rejected, just dropped if they don't look right.
     const receiving = kind !== 'cashin';

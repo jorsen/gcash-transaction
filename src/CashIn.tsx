@@ -6,7 +6,7 @@ import { CropSheet } from './CropSheet';
 import { compressForStorage, findReceiptCard, isScreenshot, type CropBox } from './image';
 import { recognizePasses } from './ocr';
 import { looksLikeBankTransfer, parseBankTransfer } from './parseBank';
-import { countOf, majority, parseGcashReceipt, voteAmount } from './parseGcash';
+import { countOf, majority, parseGcashReceipt, parseRefTail, REF_TAIL, voteAmount } from './parseGcash';
 import { peso, prettyDate } from './format';
 import { markLocalAction } from './sound';
 import { Icon, Lightbox, SkeletonRows, useUi } from './ui';
@@ -114,6 +114,7 @@ interface Scanned {
   conflicts: number;
   /** At least 2 readings agree on the date (so a misread digit can't block a fresh receipt). */
   dateSure: boolean;
+  /** Last 5 digits of the reference number (all a blurry photo reliably shows; enough to tell receipts apart). */
   refNo: string;
   /** Sender's name (bank receipts). */
   name: string;
@@ -282,7 +283,7 @@ export function CashIn({
         votes,
         conflicts,
         dateSure: countOf(per.map((p) => p.txnDate), txnDate) >= 2,
-        refNo: majority(per.map((p) => p.refNo)) || all.refNo,
+        refNo: (majority(per.map((p) => p.refNo.replace(/\s+/g, '').slice(-REF_TAIL))) || all.refNo.replace(/\s+/g, '')).slice(-REF_TAIL),
         name: (majority(per.map((p) => p.from.name)) || all.from.name).toUpperCase(),
         bankName: majority(per.map((p) => p.from.bank)) || all.from.bank,
         last4: majority(per.map((p) => p.from.last4)) || all.from.last4,
@@ -301,7 +302,7 @@ export function CashIn({
       votes,
       conflicts,
       dateSure: countOf(per.map((p) => p.txnDate), txnDate) >= 2,
-      refNo: majority(per.map((p) => p.refNo)),
+      refNo: majority(texts.map(parseRefTail)),
       name: '',
       bankName: '',
       last4: '',
@@ -529,7 +530,7 @@ export function CashIn({
       {(r.source === 'bank' || r.refNo) && (
         <div className="row-sub">
           {r.source === 'bank' ? 'InstaPay / bank transfer to GCash' : 'GCash'}
-          {r.refNo ? ` · Ref ${r.refNo}` : ''}
+          {r.refNo ? ` · Ref …${r.refNo.slice(-REF_TAIL)}` : ''}
         </div>
       )}
       {r.hasProof && (
@@ -723,8 +724,8 @@ export function CashIn({
                     </dd>
                   </>
                 )}
-                <dt>Reference No.</dt>
-                <dd className="mono">{scanned.refNo || '—'}</dd>
+                <dt>Ref no. (last 5)</dt>
+                <dd className="mono">{scanned.refNo ? `…${scanned.refNo}` : '—'}</dd>
                 <dt>Date</dt>
                 <dd>{scanned.txnDate ? prettyDate(scanned.txnDate) : '—'}</dd>
               </dl>
