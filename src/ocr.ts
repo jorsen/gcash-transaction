@@ -48,9 +48,19 @@ export interface OcrOptions {
    * one as "sparse text". Noisy photos give different pieces in each, so together they cover more.
    */
   multiPass?: boolean;
+  /**
+   * Also read the original image without the grayscale/contrast step. Clean screenshots read best
+   * as-is, noisy photos read best enhanced; reading both and comparing covers either case.
+   */
+  plainPass?: boolean;
 }
 
 export async function recognizeText(file: Blob, progress?: (label: string) => void, opts: OcrOptions = {}): Promise<string> {
+  return (await recognizePasses(file, progress, opts)).join('\n');
+}
+
+/** Like recognizeText, but returns each reading separately (so their results can be compared). */
+export async function recognizePasses(file: Blob, progress?: (label: string) => void, opts: OcrOptions = {}): Promise<string[]> {
   onProgress = progress ?? null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -59,18 +69,20 @@ export async function recognizeText(file: Blob, progress?: (label: string) => vo
   try {
     const work = (async () => {
       const [worker, canvas] = await Promise.all([getWorker(), prepareForOcr(file, opts)]);
-      if (!opts.multiPass) {
-        await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
-        const { data } = await worker.recognize(canvas);
-        return data.text;
-      }
       const texts: string[] = [];
-      for (const psm of [PSM.SINGLE_BLOCK, PSM.SPARSE_TEXT]) {
+      const read = async (c: HTMLCanvasElement, psm: PSM) => {
         await worker.setParameters({ tessedit_pageseg_mode: psm });
-        texts.push((await worker.recognize(canvas)).data.text);
+        texts.push((await worker.recognize(c)).data.text);
+      };
+      if (opts.multiPass) {
+        await read(canvas, PSM.SINGLE_BLOCK);
+        await read(canvas, PSM.SPARSE_TEXT);
+      } else {
+        await read(canvas, PSM.AUTO);
       }
+      if (opts.plainPass && opts.enhance) await read(await prepareForOcr(file, { crop: opts.crop }), PSM.AUTO);
       await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO });
-      return texts.join('\n');
+      return texts;
     })();
     return await Promise.race([work, timeout]);
   } catch (e) {

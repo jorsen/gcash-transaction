@@ -4,8 +4,8 @@ import { BlobImage } from './BlobImage';
 import { MaskedName } from './CashIn';
 import { peso } from './format';
 import { compressForStorage } from './image';
-import { recognizeText } from './ocr';
-import { formatDateTime, parseGcashReceipt, type ParsedReceipt, type TxnType } from './parseGcash';
+import { recognizePasses } from './ocr';
+import { formatDateTime, parseGcashPasses, parseGcashReceipt, type ParsedReceipt, type TxnType } from './parseGcash';
 import { markLocalAction, playChime } from './sound';
 import { Icon, SkeletonRows, useUi } from './ui';
 
@@ -72,10 +72,12 @@ export function AttachReceipt({
         setRequests([]);
         ui.toast(e instanceof Error ? e.message : String(e), 'error');
       });
-    recognizeText(file, setProgress)
-      .then((text) => {
+    recognizePasses(file, setProgress, { enhance: true, plainPass: true })
+      .then((passes) => {
+        const texts = passes.reverse();
+        const text = texts.join('\n');
         setRawText(text);
-        setParsed(parseGcashReceipt(text));
+        setParsed(parseGcashPasses(texts));
       })
       .catch(() => setParsed(null))
       .finally(() => setReading(false));

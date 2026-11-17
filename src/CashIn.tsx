@@ -3,10 +3,10 @@ import { api, blobToPayload, proofUrl, type CashinRequest, type RequestKind, typ
 import { BlobImage } from './BlobImage';
 import { CameraSheet } from './CameraSheet';
 import { CropSheet } from './CropSheet';
-import { compressForStorage, type CropBox } from './image';
-import { recognizeText } from './ocr';
+import { compressForStorage, isScreenshot, type CropBox } from './image';
+import { recognizePasses } from './ocr';
 import { looksLikeBankTransfer, parseBankTransfer } from './parseBank';
-import { parseGcashReceipt } from './parseGcash';
+import { parseGcashReceipt, pickAmount } from './parseGcash';
 import { peso } from './format';
 import { markLocalAction } from './sound';
 import { Icon, SkeletonRows, useUi } from './ui';
@@ -173,9 +173,13 @@ export function CashIn({
     setScanning(true);
     setScanMsg('Reading receipt…');
     try {
-      const text = await recognizeText(file, (p) => setScanMsg(p), { crop, enhance: true, multiPass: true });
+      // Several readings (enhanced ×2 + original); the amount is the one most readings agree on.
+      const texts = await recognizePasses(file, (p) => setScanMsg(p), { crop, enhance: true, multiPass: true, plainPass: true });
+      const text = texts.join('\n');
+      const voted = pickAmount(texts);
       if (looksLikeBankTransfer(text)) {
-        const p = parseBankTransfer(text);
+        const p = { ...parseBankTransfer(text) };
+        p.amount = voted ?? p.amount;
         setSource('bank');
         setBank((b) => ({
           bankName: p.from.bank || b.bankName,
@@ -196,7 +200,8 @@ export function CashIn({
         ].filter(Boolean);
         setScanMsg(got.length ? `${p.channel || 'Bank transfer'} · read ${got.join(', ')}. Check every field before sending.` : "Couldn't read it. Type the details below.");
       } else {
-        const p = parseGcashReceipt(text);
+        const p = { ...parseGcashReceipt(text) };
+        p.amount = voted ?? p.amount;
         setForm((f) => ({ ...f, amount: p.amount !== null ? p.amount.toFixed(2) : f.amount }));
         if (p.refNo) setBankField('refNo', p.refNo);
         setScanMsg(p.amount !== null ? 'Read the amount. Check the details before sending.' : "Couldn't read it. Type the details below.");
@@ -573,7 +578,9 @@ export function CashIn({
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   e.target.value = '';
-                  if (f) setCropFile(f);
+                  if (!f) return;
+                  // Screenshot: read it whole right away. Camera photo: frame the receipt first.
+                  isScreenshot(f).then((shot) => (shot ? scanProof(f) : setCropFile(f)));
                 }}
               />
             </div>

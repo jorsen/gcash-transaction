@@ -42,6 +42,20 @@ export async function compressForStorage(file: Blob): Promise<Blob> {
   return toBlob(await drawScaled(file, 1600), 0.72);
 }
 
+/**
+ * True for a phone screenshot (tall, about 9:19.5 or narrower) rather than a camera photo (4:3 / 16:9).
+ * A screenshot is already just the receipt, so it needs no framing step.
+ */
+export async function isScreenshot(file: Blob): Promise<boolean> {
+  try {
+    const src = await decode(file);
+    src.close();
+    return src.height / src.width >= 1.85;
+  } catch {
+    return false;
+  }
+}
+
 /** Part of an image, as fractions (0–1) of its width/height. */
 export interface CropBox {
   x: number;
@@ -58,6 +72,16 @@ export interface CropBox {
 export async function prepareForOcr(file: Blob, opts: { crop?: CropBox; enhance?: boolean } = {}): Promise<HTMLCanvasElement> {
   const full = await drawScaled(file, 2200);
   let canvas = full;
+  if (!opts.crop && full.width < 1100) {
+    // Small / compressed screenshots (e.g. forwarded through Messenger): enlarge so letters are big enough to read.
+    const scale = Math.min(2.5, 1100 / full.width);
+    canvas = document.createElement('canvas');
+    canvas.width = Math.round(full.width * scale);
+    canvas.height = Math.round(full.height * scale);
+    const ctx = canvas.getContext('2d')!;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(full, 0, 0, canvas.width, canvas.height);
+  }
   if (opts.crop) {
     const { x, y, w, h } = opts.crop;
     const sx = Math.round(x * full.width);
@@ -94,9 +118,13 @@ function enhanceForOcr(canvas: HTMLCanvasElement) {
   for (let acc = 0; lo < 255 && (acc += hist[lo]) < total * 0.02; lo++);
   for (let acc = 0; hi > 0 && (acc += hist[hi]) < total * 0.02; hi--);
   const range = Math.max(1, hi - lo);
+  // Dark mode (light text on a dark background): flip it, the text reader expects dark text on light.
+  let sum = 0;
+  for (let g = 0; g < 256; g++) sum += g * hist[g];
+  const invert = sum / total < 110;
   for (let i = 0; i < d.length; i += 4) {
     const v = Math.max(0, Math.min(255, ((d[i] - lo) * 255) / range));
-    d[i] = d[i + 1] = d[i + 2] = v;
+    d[i] = d[i + 1] = d[i + 2] = invert ? 255 - v : v;
   }
   ctx.putImageData(img, 0, 0);
 }

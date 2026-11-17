@@ -57,7 +57,41 @@ function toNumber(s: string): number | null {
 const MONEY = /(?:₱|PHP|Php|P)?\s?(\d{1,3}(?:[,\s]\d{3})*\.\d{2}|\d+\.\d{2})\b/;
 const MONEY_G = new RegExp(MONEY.source, 'g');
 
-export function parseAmount(lines: string[]): number | null {
+/**
+ * Fixes common OCR slips in money: "1.000.00" -> "1,000.00" (thousands dot), "500,00" -> "500.00"
+ * (decimal comma), "1, 000.00" -> "1,000.00", and O/o read for 0 inside a number ("1,0O0.00").
+ */
+export function normalizeMoney(line: string): string {
+  let s = line.replace(/(\d)[Oo](?=[\d.,Oo]*\d)/g, '$10').replace(/(\d)[Oo](?=[.,]\d{2}\b)/g, '$10');
+  s = s.replace(/(\d)\s*,\s+(\d{3})/g, '$1,$2');
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/(?<![\d.,])(\d{1,3})\.(\d{3})(?=[.,]\d{2}\b)/g, '$1,$2');
+  } while (s !== prev);
+  return s.replace(/(?<![\d.,])(\d{1,3}(?:,\d{3})*|\d+),(\d{2})\b(?![,.]?\d)/g, '$1.$2');
+}
+
+/**
+ * Best amount across several readings of the same receipt: the value most readings agree on
+ * (ties go to the earlier reading). One misread digit in one reading is outvoted by the others.
+ */
+export function pickAmount(texts: string[]): number | null {
+  const votes = new Map<number, number>();
+  const order: number[] = [];
+  for (const t of texts) {
+    const a = parseAmount(t.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
+    if (a === null) continue;
+    if (!votes.has(a)) order.push(a);
+    votes.set(a, (votes.get(a) ?? 0) + 1);
+  }
+  let best: number | null = null;
+  for (const a of order) if (best === null || votes.get(a)! > votes.get(best)!) best = a;
+  return best;
+}
+
+export function parseAmount(rawLines: string[]): number | null {
+  const lines = rawLines.map(normalizeMoney);
   // Most specific labels first. The value is on the same line or the next one.
   const labels = [
     /total\s+amount\s+sent/i,
@@ -69,16 +103,17 @@ export function parseAmount(lines: string[]): number | null {
   for (const label of labels) {
     for (let i = 0; i < lines.length; i++) {
       if (!label.test(lines[i])) continue;
-      const same = lines[i].match(MONEY);
-      if (same) return toNumber(same[1]);
-      const next = lines[i + 1]?.match(MONEY);
-      if (next) return toNumber(next[1]);
+      // ₱0.00 (e.g. "Fee 0.00" read under the label) is never the amount.
+      const same = toNumber(lines[i].match(MONEY)?.[1] ?? '');
+      if (same) return same;
+      const next = toNumber(lines[i + 1]?.match(MONEY)?.[1] ?? '');
+      if (next) return next;
     }
   }
   // Fallback: the largest money-looking value on the receipt.
   const all = [...lines.join('\n').matchAll(MONEY_G)]
     .map((m) => toNumber(m[1]))
-    .filter((n): n is number => n !== null);
+    .filter((n): n is number => n !== null && n > 0);
   return all.length ? Math.max(...all) : null;
 }
 
@@ -213,4 +248,22 @@ export function parseGcashReceipt(rawText: string): ParsedReceipt {
     recipient: normalizeMaskedName(parseRecipient(lines, phoneIdx)),
     phone,
   };
+}
+
+/**
+ * Combines several readings of one receipt (best reading first): fields come from the first reading
+ * that has them, and the amount is the one most readings agree on.
+ */
+export function parseGcashPasses(texts: string[]): ParsedReceipt {
+  const all = texts.map(parseGcashReceipt);
+  const p = { ...all[0] };
+  for (const o of all.slice(1)) {
+    if (p.type === 'Other') p.type = o.type;
+    p.refNo ||= o.refNo;
+    p.txnDate ||= o.txnDate;
+    p.recipient ||= o.recipient;
+    p.phone ||= o.phone;
+  }
+  p.amount = pickAmount(texts) ?? p.amount;
+  return p;
 }

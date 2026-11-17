@@ -5,8 +5,8 @@ import { peso, prettyDate } from './format';
 import { markLocalAction } from './sound';
 import { Icon, useUi } from './ui';
 import { compressForStorage } from './image';
-import { recognizeText } from './ocr';
-import { formatDateTime, parseGcashReceipt, TXN_TYPES, type TxnType } from './parseGcash';
+import { recognizePasses } from './ocr';
+import { formatDateTime, parseGcashPasses, parseGcashReceipt, TXN_TYPES, type TxnType } from './parseGcash';
 
 type Form = {
   type: TxnType;
@@ -72,9 +72,11 @@ export function Review({
   /** Runs OCR and fills the form. Callers set `scanning` first. */
   const runScan = async (img: Blob) => {
     try {
-      const text = await recognizeText(img, setProgress);
+      // Original + enhanced readings (clean screenshots and dark-mode / blurry ones both read well).
+      const texts = (await recognizePasses(img, setProgress, { enhance: true, plainPass: true })).reverse();
+      const text = texts.join('\n');
       setRawText(text);
-      const p = parseGcashReceipt(text);
+      const p = parseGcashPasses(texts);
       setForm((f) => ({
         ...f,
         type: p.type === 'Other' ? f.type : p.type,
