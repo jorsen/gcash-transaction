@@ -97,6 +97,24 @@ export interface CashinRequest {
   handledByName: string | null;
 }
 
+export type ActivityCategory = 'auth' | 'receipt' | 'cashin' | 'staff' | 'business';
+
+export interface ActivityItem {
+  id: number;
+  /** e.g. "cashin.create", "receipt.delete", "auth.login" */
+  action: string;
+  summary: string;
+  userId: number | null;
+  userName: string;
+  role: string;
+  device: string;
+  targetType: 'transaction' | 'cashin' | 'user' | 'business' | null;
+  targetId: number | null;
+  createdAt: string;
+  businessId: number | null;
+  businessName: string | null;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -166,6 +184,14 @@ export const api = {
   deleteTransaction: (id: number) => request<{ ok: true }>('DELETE', `transactions/${id}`),
   changes: (businessId?: number | null) =>
     request<{ receipts: string; cashin: string; pending: number; latestKind: RequestKind | null; lastRemind: string | null }>('GET', `changes${businessId ? `?businessId=${businessId}` : ''}`),
+  activity: (q: { businessId?: number | null; category?: ActivityCategory | null; before?: number; userId?: number }) => {
+    const p = new URLSearchParams();
+    if (q.businessId) p.set('businessId', String(q.businessId));
+    if (q.category) p.set('category', q.category);
+    if (q.before) p.set('before', String(q.before));
+    if (q.userId) p.set('userId', String(q.userId));
+    return request<{ items: ActivityItem[]; more: boolean }>('GET', `activity?${p}`);
+  },
   pushKey: () => request<{ publicKey: string }>('GET', 'push/key'),
   pushSubscribe: (sub: PushSubscriptionJSON) => request<{ ok: true }>('POST', 'push/subscribe', sub),
   pushUnsubscribe: (endpoint: string) => request<{ ok: true }>('POST', 'push/unsubscribe', { endpoint }),

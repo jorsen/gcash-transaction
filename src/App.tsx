@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { api, imageUrl, setUnauthorizedHandler, type StaffUser, type Summary, type Txn, type User } from './api';
+import { Activity } from './Activity';
 import { AttachReceipt } from './AttachReceipt';
 import { exportCsv, uploadLocalRecords } from './backup';
 import { Businesses } from './Businesses';
@@ -20,7 +21,8 @@ type View =
   | { name: 'biz'; biz: Biz }
   | { name: 'review'; file?: File; id?: number }
   | { name: 'staff' }
-  | { name: 'attach'; file: Blob; requestId?: number };
+  | { name: 'attach'; file: Blob; requestId?: number }
+  | { name: 'activity' };
 type Open = (v: View) => void;
 
 interface BeforeInstallPromptEvent extends Event {
@@ -159,12 +161,28 @@ export function App() {
     ? ([...stack].reverse().find((v): v is Extract<View, { name: 'biz' }> => v.name === 'biz')?.biz ?? null)
     : { id: user.businessId as number, name: user.businessName ?? '' };
 
+  if (top?.name === 'activity') {
+    return (
+      <Activity
+        user={user}
+        businessId={isSuper ? (biz?.id ?? null) : null}
+        businessName={biz?.name ?? ''}
+        onBack={close}
+        onOpenReceipt={(id) => open({ name: 'review', id })}
+      />
+    );
+  }
+  // Super admin opening a receipt from the all-businesses activity log (no business chosen).
+  if (top?.name === 'review' && isSuper && !biz) {
+    return <Review user={user} businessId={null} file={top.file} id={top.id} onDone={close} />;
+  }
   if (!top || !biz) {
     if (isSuper) {
       return (
         <Businesses
           user={user}
           onOpen={(b) => open({ name: 'biz', biz: { id: b.id, name: b.name } })}
+          onActivity={() => open({ name: 'activity' })}
           onChangePassword={changePassword}
           onLogout={logout}
         />
@@ -750,6 +768,7 @@ function Home({
           onClose={() => setSheet(null)}
           actions={[
             ...(isOwner ? [{ icon: 'users' as const, label: 'Staff accounts', hint: 'Add tinderas, reset passwords', onClick: () => onOpen({ name: 'staff' }) }] : []),
+            ...(isOwner ? [{ icon: 'more' as const, label: 'Activity log', hint: 'Who did what, and when', onClick: () => onOpen({ name: 'activity' }) }] : []),
             ...(isOwner
               ? [{ icon: 'image' as const, label: 'Share from GCash: setup', hint: 'Put GCash Tracker first in "Share via"', onClick: shareSetupHelp }]
               : []),

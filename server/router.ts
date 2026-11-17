@@ -12,6 +12,7 @@ import {
 } from './auth.js';
 import { query } from './db.js';
 import { notifyOwners, notifyUsers, publicKey, removeSubscription, saveSubscription } from './push.js';
+import { logActivity } from './activity.js';
 
 const peso = (n: number) => `₱${n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 /** "09171234567" -> "0917 123 4567" */
@@ -161,7 +162,17 @@ const TXN_FROM = `FROM transactions t JOIN users u ON u.id = t.created_by LEFT J
 
 /** Loads a transaction the user is allowed to see, or throws 404/403. */
 async function loadTxn(id: number, me: User, opts: { forEdit?: boolean } = {}) {
-  const rows = await query<Record<string, unknown> & { createdBy: number; businessId: number }>(
+  const rows = await query<
+    Record<string, unknown> & {
+      createdBy: number;
+      businessId: number;
+      amount: number;
+      type: string;
+      refNo: string;
+      recipient: string;
+      createdByName: string;
+    }
+  >(
     `SELECT ${TXN_COLUMNS}, t.raw_text AS "rawText" ${TXN_FROM} WHERE t.id = $1`,
     [id],
   );
@@ -237,6 +248,7 @@ async function route(req: Request): Promise<Response> {
       [username, cleanName(b.name), await hashPassword(cleanPassword(b.password))],
     );
     const me: User = { id: u.id, username, name: cleanName(b.name), role: 'superadmin', businessId: null, businessName: null };
+    await logActivity(req, me, null, { action: 'auth.setup', summary: 'Created the super admin account', targetType: 'user', targetId: u.id });
     return json({ user: me }, { headers: { 'Set-Cookie': await createSession(req, u.id) } });
   }
 
@@ -249,14 +261,20 @@ async function route(req: Request): Promise<Response> {
     );
     const u = rows[0];
     const ok = u ? await verifyPassword(String(b.password ?? ''), u.passwordHash) : false;
+    if (u && !ok) {
+      // Wrong password for a real account: worth seeing in the owner's log.
+      await logActivity(req, u, u.businessId, { action: 'auth.login_failed', summary: `Wrong password for @${u.username}`, targetType: 'user', targetId: u.id });
+    }
     if (!u || !ok) throw new HttpError(401, 'Wrong username or password.');
     if (!u.active) throw new HttpError(403, 'This account is deactivated. Please ask your owner or admin.');
     if (u.role !== 'superadmin' && !u.businessActive) throw new HttpError(403, 'This business is deactivated. Please contact the admin.');
     const me: User = { id: u.id, username: u.username, name: u.name, role: u.role, businessId: u.businessId, businessName: u.businessName };
+    await logActivity(req, me, me.businessId, { action: 'auth.login', summary: 'Logged in', targetType: 'user', targetId: me.id });
     return json({ user: me }, { headers: { 'Set-Cookie': await createSession(req, u.id) } });
   }
 
   if (path === 'logout' && m === 'POST') {
+    if (user) await logActivity(req, user, user.businessId, { action: 'auth.logout', summary: 'Logged out', targetType: 'user', targetId: user.id });
     return json({ ok: true }, { headers: { 'Set-Cookie': await destroySession(req) } });
   }
 
@@ -266,6 +284,7 @@ async function route(req: Request): Promise<Response> {
     const [row] = await query<{ password_hash: string }>(`SELECT password_hash FROM users WHERE id = $1`, [me.id]);
     if (!(await verifyPassword(String(b.current ?? ''), row.password_hash))) throw new HttpError(400, 'Current password is wrong.');
     await query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [await hashPassword(cleanPassword(b.next)), me.id]);
+    await logActivity(req, me, me.businessId, { action: 'auth.password', summary: 'Changed their own password', targetType: 'user', targetId: me.id });
     return json({ ok: true });
   }
 
@@ -296,6 +315,12 @@ async function route(req: Request): Promise<Response> {
       `INSERT INTO users (username, name, password_hash, role, business_id) VALUES ($1, $2, $3, 'owner', $4)`,
       [username, ownerName, await hashPassword(password), bz.id],
     );
+    await logActivity(req, user, bz.id, {
+      action: 'business.create',
+      summary: `Created business "${name}" with owner ${ownerName} (@${username})`,
+      targetType: 'business',
+      targetId: bz.id,
+    });
     return json({ business: { id: bz.id, name } });
   }
 
@@ -304,10 +329,21 @@ async function route(req: Request): Promise<Response> {
     const id = Number(parts[1]);
     await assertBusinessExists(id);
     const b = await body<{ name?: string; active?: boolean }>(req);
-    if (b.name !== undefined) await query(`UPDATE businesses SET name = $1 WHERE id = $2`, [cleanName(b.name, 'the business name'), id]);
+    const [before] = await query<{ name: string }>(`SELECT name FROM businesses WHERE id = $1`, [id]);
+    if (b.name !== undefined) {
+      const name = cleanName(b.name, 'the business name');
+      await query(`UPDATE businesses SET name = $1 WHERE id = $2`, [name, id]);
+      await logActivity(req, user, id, { action: 'business.rename', summary: `Renamed the business from "${before.name}" to "${name}"`, targetType: 'business', targetId: id });
+    }
     if (b.active !== undefined) {
       await query(`UPDATE businesses SET active = $1 WHERE id = $2`, [Boolean(b.active), id]);
       if (!b.active) await query(`DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE business_id = $1)`, [id]);
+      await logActivity(req, user, id, {
+        action: b.active ? 'business.activate' : 'business.deactivate',
+        summary: b.active ? 'Activated the business' : 'Deactivated the business (all staff logged out)',
+        targetType: 'business',
+        targetId: id,
+      });
     }
     return json({ ok: true });
   }
@@ -343,14 +379,20 @@ async function route(req: Request): Promise<Response> {
        RETURNING id, username, name, role, active`,
       [username, cleanName(b.name), await hashPassword(cleanPassword(b.password)), role, businessId],
     );
+    await logActivity(req, me, businessId, {
+      action: 'staff.create',
+      summary: `Added ${role === 'owner' ? 'owner' : 'tindera'} ${cleanName(b.name)} (@${username})`,
+      targetType: 'user',
+      targetId: (u as { id: number }).id,
+    });
     return json({ user: u });
   }
 
   if (parts[0] === 'users' && parts.length === 2 && m === 'PATCH') {
     const me = requireManager(user);
     const id = Number(parts[1]);
-    const [target] = await query<{ role: Role; businessId: number | null }>(
-      `SELECT role, business_id AS "businessId" FROM users WHERE id = $1`,
+    const [target] = await query<{ role: Role; businessId: number | null; name: string; username: string }>(
+      `SELECT role, business_id AS "businessId", name, username FROM users WHERE id = $1`,
       [id],
     );
     if (!target) throw new HttpError(404, 'User not found.');
@@ -362,16 +404,27 @@ async function route(req: Request): Promise<Response> {
       throw new HttpError(403, 'Not allowed.');
     }
     const b = await body<{ name?: string; password?: string; active?: boolean }>(req);
-    if (b.name !== undefined) await query(`UPDATE users SET name = $1 WHERE id = $2`, [cleanName(b.name), id]);
+    const who = self ? 'their own' : `${target.name}'s (@${target.username})`;
+    if (b.name !== undefined) {
+      await query(`UPDATE users SET name = $1 WHERE id = $2`, [cleanName(b.name), id]);
+      await logActivity(req, me, target.businessId, { action: 'staff.rename', summary: `Renamed ${target.name} to ${cleanName(b.name)}`, targetType: 'user', targetId: id });
+    }
     if (b.password !== undefined) {
       await query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [await hashPassword(cleanPassword(b.password)), id]);
       if (!self) await endSessionsForUser(id); // log them out everywhere
+      await logActivity(req, me, target.businessId, { action: 'staff.password', summary: `Reset ${who} password`, targetType: 'user', targetId: id });
     }
     if (b.active !== undefined) {
       if (self) throw new HttpError(400, "You can't deactivate your own account.");
       if (target.role === 'owner' && me.role !== 'superadmin') throw new HttpError(403, 'Only the super admin can deactivate owners.');
       await query(`UPDATE users SET active = $1 WHERE id = $2`, [Boolean(b.active), id]);
       if (!b.active) await endSessionsForUser(id);
+      await logActivity(req, me, target.businessId, {
+        action: b.active ? 'staff.activate' : 'staff.deactivate',
+        summary: `${b.active ? 'Activated' : 'Deactivated'} ${target.name} (@${target.username})`,
+        targetType: 'user',
+        targetId: id,
+      });
     }
     return json({ ok: true });
   }
@@ -423,6 +476,12 @@ async function route(req: Request): Promise<Response> {
       [t.type, t.amount, t.refNo, t.recipient, t.phone, t.txnDate, t.note, t.rawText, me.id, businessId],
     );
     await saveImage(row.id, img);
+    await logActivity(req, me, businessId, {
+      action: 'receipt.create',
+      summary: `Saved a receipt · ${t.type} ${peso(t.amount)}${t.recipient ? ` · ${t.recipient}` : ''}${t.refNo ? ` · Ref ${t.refNo}` : ''}`,
+      targetType: 'transaction',
+      targetId: row.id,
+    });
     await notifyOwners(
       businessId,
       me.id,
@@ -442,6 +501,38 @@ async function route(req: Request): Promise<Response> {
   // the browser posts here; send the user back to the app with a hint to try again.
   if ((path === 'share-receipt' || url.pathname === '/share-receipt') && m === 'POST') {
     return new Response(null, { status: 303, headers: { Location: '/?share=failed' } });
+  }
+
+  // ---------- activity log ----------
+  // Owner: their business. Super admin: one business (?businessId=) or all businesses.
+  if (path === 'activity' && m === 'GET') {
+    const me = requireManager(user);
+    const params: unknown[] = [];
+    const where: string[] = [];
+    const add = (sql: string, v: unknown) => {
+      params.push(v);
+      where.push(sql.replace('?', `$${params.length}`));
+    };
+    const requested = url.searchParams.get('businessId');
+    if (me.role !== 'superadmin') add('a.business_id = ?', me.businessId);
+    else if (requested) add('a.business_id = ?', Number(requested));
+    const category = url.searchParams.get('category');
+    if (category && /^(auth|receipt|cashin|staff|business)$/.test(category)) add("split_part(a.action, '.', 1) = ?", category);
+    const userId = Number(url.searchParams.get('userId') ?? 0);
+    if (userId) add('a.user_id = ?', userId);
+    const before = Number(url.searchParams.get('before') ?? 0);
+    if (before) add('a.id < ?', before);
+    const limit = Math.min(100, Math.max(10, Number(url.searchParams.get('limit') ?? 50) || 50));
+    const items = await query(
+      `SELECT a.id::int AS id, a.action, a.summary, a.user_id AS "userId", a.user_name AS "userName", a.role, a.device,
+              a.target_type AS "targetType", a.target_id AS "targetId", a.created_at AS "createdAt",
+              a.business_id AS "businessId", bz.name AS "businessName"
+         FROM activity_log a LEFT JOIN businesses bz ON bz.id = a.business_id
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        ORDER BY a.id DESC LIMIT ${limit + 1}`,
+      params,
+    );
+    return json({ items: items.slice(0, limit), more: items.length > limit });
   }
 
   // ---------- push notifications ----------
@@ -551,6 +642,12 @@ async function route(req: Request): Promise<Response> {
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
       [businessId, me.id, number, gcashName, amount, note, kind],
     );
+    await logActivity(req, me, businessId, {
+      action: 'cashin.create',
+      summary: `Sent a ${kind === 'cashout' ? 'cash-out' : 'cash-in'} request · ${prettyNumber(number)}${gcashName ? ` · ${gcashName}` : ''}${amount ? ` · ${peso(amount)}` : ''}`,
+      targetType: 'cashin',
+      targetId: row.id,
+    });
     await notifyOwners(
       businessId,
       me.id,
@@ -616,6 +713,12 @@ async function route(req: Request): Promise<Response> {
        RETURNING remind_count AS "remindCount"`,
       [id],
     );
+    await logActivity(req, me, r.businessId, {
+      action: 'cashin.remind',
+      summary: `Reminded the owner (${remindCount}×) · ${prettyNumber(r.number)}${r.amount ? ` · ${peso(r.amount)}` : ''}`,
+      targetType: 'cashin',
+      targetId: id,
+    });
     const shout = r.kind === 'cashout' ? 'Pa-cash out po!' : 'Pa-cash in po!';
     await notifyOwners(
       r.businessId,
@@ -659,6 +762,12 @@ async function route(req: Request): Promise<Response> {
       if (r.status === 'processing') return json({ ok: true });
       if (r.status !== 'pending') throw new HttpError(409, `This request is already ${r.status}.`);
       await query(`UPDATE cashin_requests SET status = 'processing', processing_at = NOW(), processing_by = $1 WHERE id = $2`, [me.id, id]);
+      await logActivity(req, me, r.businessId, {
+        action: 'cashin.processing',
+        summary: `Started processing a cash-in · ${prettyNumber(r.number)}${r.amount ? ` · ${peso(r.amount)}` : ''}`,
+        targetType: 'cashin',
+        targetId: id,
+      });
       return json({ ok: true });
     }
     let txnId: number | null = null;
@@ -679,6 +788,18 @@ async function route(req: Request): Promise<Response> {
       `UPDATE cashin_requests SET status = $1, handled_by = $2, handled_at = NOW(), txn_id = COALESCE($4, txn_id) WHERE id = $3`,
       [b.status, me.id, id, txnId],
     );
+    {
+      const label = r.kind === 'cashout' ? 'cash-out' : 'cash-in';
+      await logActivity(req, me, r.businessId, {
+        action: b.status === 'done' ? 'cashin.done' : 'cashin.cancel',
+        summary:
+          b.status === 'done'
+            ? `Marked a ${label} as ${r.kind === 'cashout' ? 'received' : 'sent'}${txnId ? ' (receipt attached)' : ''} · ${prettyNumber(r.number)}${r.amount ? ` · ${peso(r.amount)}` : ''}`
+            : `Cancelled a ${label} request · ${prettyNumber(r.number)}${r.amount ? ` · ${peso(r.amount)}` : ''}`,
+        targetType: 'cashin',
+        targetId: id,
+      });
+    }
     if (r.createdBy !== me.id) {
       const label = r.kind === 'cashout' ? 'Cash-out' : 'Cash-in';
       await notifyUsers(
@@ -778,7 +899,7 @@ async function route(req: Request): Promise<Response> {
     if (parts.length === 2 && m === 'GET') return json({ txn: await loadTxn(id, me) });
 
     if (parts.length === 2 && m === 'PUT') {
-      await loadTxn(id, me, { forEdit: true });
+      const before = await loadTxn(id, me, { forEdit: true });
       const b = await body<TxnBody>(req);
       const t = cleanTxn(b);
       await query(
@@ -787,13 +908,26 @@ async function route(req: Request): Promise<Response> {
         [t.type, t.amount, t.refNo, t.recipient, t.phone, t.txnDate, t.note, t.rawText, id],
       );
       await saveImage(id, b.image === undefined ? undefined : cleanImage(b.image));
+      const changed = before.amount !== t.amount ? ` (amount ${peso(before.amount)} → ${peso(t.amount)})` : '';
+      await logActivity(req, me, before.businessId, {
+        action: 'receipt.update',
+        summary: `Edited a receipt · ${t.type} ${peso(t.amount)}${t.refNo ? ` · Ref ${t.refNo}` : ''}${changed}`,
+        targetType: 'transaction',
+        targetId: id,
+      });
       return json({ ok: true });
     }
 
     if (parts.length === 2 && m === 'DELETE') {
       requireManager(me);
-      await loadTxn(id, me);
+      const gone = await loadTxn(id, me);
       await query(`DELETE FROM transactions WHERE id = $1`, [id]);
+      await logActivity(req, me, gone.businessId, {
+        action: 'receipt.delete',
+        summary: `Deleted a receipt · ${gone.type} ${peso(gone.amount)}${gone.recipient ? ` · ${gone.recipient}` : ''}${gone.refNo ? ` · Ref ${gone.refNo}` : ''} (recorded by ${gone.createdByName})`,
+        targetType: 'transaction',
+        targetId: id,
+      });
       return json({ ok: true });
     }
   }

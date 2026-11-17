@@ -7,11 +7,14 @@ import { ActionSheet, Avatar, Icon, SkeletonRows, useUi } from './ui';
 export function Businesses({
   user,
   onOpen,
+  onActivity,
   onChangePassword,
   onLogout,
 }: {
   user: User;
   onOpen: (b: Business) => void;
+  /** Activity log across all businesses. */
+  onActivity: () => void;
   onChangePassword: () => void;
   onLogout: () => void;
 }) {
@@ -110,6 +113,7 @@ export function Businesses({
             title={`${user.name} · Super admin`}
             onClose={() => setMenuOpen(false)}
             actions={[
+              { icon: 'more', label: 'Activity log', hint: 'All businesses', onClick: onActivity },
               { icon: 'key', label: 'Change password', onClick: onChangePassword },
               { icon: 'logout', label: 'Log out', onClick: onLogout },
             ]}

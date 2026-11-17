@@ -458,3 +458,21 @@ input.mono { text-transform: uppercase; }
 @keyframes pulse { 50% { transform: scale(1.06); box-shadow: 0 0 0 4px rgba(229, 52, 27, 0.25); } }
 
 .open-gcash { align-self: flex-start; text-decoration: none; color: var(--blue); }
+
+/* ---------- activity log ---------- */
+.activity-list { gap: 6px; }
+.activity-row {
+  width: 100%; display: flex; align-items: flex-start; gap: 12px; text-align: left;
+  background: var(--card); border-radius: 12px; padding: 10px 12px; box-shadow: var(--shadow-sm);
+}
+button.activity-row:active { transform: scale(0.99); }
+.activity-icon { width: 34px; height: 34px; flex: none; border-radius: 10px; display: grid; place-items: center; background: var(--blue-soft); color: var(--blue); }
+.activity-icon.good { background: var(--green-soft); color: var(--green); }
+.activity-icon.bad { background: var(--red-soft); color: var(--red); }
+.activity-icon.warn { background: var(--amber-soft); color: var(--amber-text); }
+.activity-who { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13.5px; }
+.activity-who .avatar { font-size: 8px !important; }
+.activity-role { font-size: 11px; font-weight: 700; color: var(--muted); background: var(--card-2); border-radius: 5px; padding: 0 6px; }
+.activity-biz { font-size: 11px; font-weight: 700; color: var(--blue); background: var(--blue-soft); border-radius: 5px; padding: 0 6px; }
+.activity-summary { font-size: 14px; line-height: 1.35; margin: 2px 0; word-break: break-word; }
+.activity-row .chevron { align-self: center; }
