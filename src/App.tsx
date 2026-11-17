@@ -746,7 +746,7 @@ function Home({
                                 Requested: <MaskedName name={t.requestedName.toUpperCase()} className="masked-name" />
                               </span>
                             )}
-                            {isOwner && <span className="row-by">by {t.createdByName}</span>}
+                            {isOwner && <span className="row-by">by {t.requestedByName || t.createdByName}</span>}
                           </span>
                           <span className={`amount ${isIncoming(t.type) ? 'in' : 'out'}`}>
                             {isIncoming(t.type) ? '+' : '−'}

@@ -245,7 +245,9 @@ export function Review({
         </button>
         <div className="appbar-title">
           <h1>{id !== undefined ? 'Transaction' : 'New receipt'}</h1>
-          {isOwner && createdByName && <small>Recorded by {createdByName}</small>}
+          {isOwner && createdByName && (
+            <small>{requested?.by ? `Tindera: ${requested.by}${requested.by !== createdByName ? ` · saved by ${createdByName}` : ''}` : `Saved by ${createdByName}`}</small>
+          )}
         </div>
         {id !== undefined && isOwner ? (
           <button className="icon-btn" aria-label="Delete transaction" onClick={remove}>

@@ -485,8 +485,13 @@ async function route(req: Request): Promise<Response> {
       params.push(v);
       where.push(sql.replace('?', `$${params.length}`));
     };
-    if (me.role === 'tindera') add('t.created_by = ?', me.id);
-    else if (url.searchParams.get('userId')) add('t.created_by = ?', Number(url.searchParams.get('userId')));
+    // A tindera's receipts: ones she saved, plus the GCash receipts of her cash-in / cash-out requests.
+    const staffId = me.role === 'tindera' ? me.id : Number(url.searchParams.get('userId')) || null;
+    if (staffId) {
+      params.push(staffId);
+      const p = `$${params.length}`;
+      where.push(`(t.created_by = ${p} OR EXISTS (SELECT 1 FROM cashin_requests c WHERE c.txn_id = t.id AND c.created_by = ${p}))`);
+    }
     if (/^\d{4}-\d{2}$/.test(month) && !search) add('substr(t.txn_date, 1, 7) = ?', month);
     // Type filter: "cashin" (store sent GCash), "cashout" (customer sent GCash to the store), or one receipt type.
     // "in" / "out" come from app versions still cached on phones, where those chips were also labelled Cash-In / Cash-Out.
@@ -497,7 +502,8 @@ async function route(req: Request): Promise<Response> {
     if (search) {
       params.push(`%${search}%`);
       const p = `$${params.length}`;
-      where.push(`(t.recipient ILIKE ${p} OR t.ref_no ILIKE ${p} OR t.note ILIKE ${p} OR t.type ILIKE ${p} OR t.phone ILIKE ${p} OR u.name ILIKE ${p})`);
+      where.push(`(t.recipient ILIKE ${p} OR t.ref_no ILIKE ${p} OR t.note ILIKE ${p} OR t.type ILIKE ${p} OR t.phone ILIKE ${p} OR u.name ILIKE ${p}
+        OR EXISTS (SELECT 1 FROM cashin_requests c JOIN users cu ON cu.id = c.created_by WHERE c.txn_id = t.id AND (cu.name ILIKE ${p} OR c.gcash_name ILIKE ${p})))`);
     }
     const whereSql = `WHERE ${where.join(' AND ')}`;
     const items = await query(
