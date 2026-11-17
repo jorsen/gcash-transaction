@@ -49,6 +49,9 @@ export default defineConfig({
         },
       },
       workbox: {
+        // A new version takes over open pages right away (with skipWaiting), so no one stays on an old copy.
+        clientsClaim: true,
+        skipWaiting: true,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],
         // Push notification handlers (public/push-sw.js).
         importScripts: ['push-sw.js'],
