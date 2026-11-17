@@ -151,7 +151,14 @@ function parseDate(text: string): string {
   return '';
 }
 
-const PHONE = /(\+63\s?9\d{2}\s?\d{3}\s?\d{4}|\b09\d{2}\s?\d{3}\s?\d{4})\b/;
+// "+63 9XX XXX XXXX" (OCR often reads the "+" of a blurry photo as "*" or misses it) or "09XX XXX XXXX".
+const PHONE = /((?:[+*]|(?<!\d))63\s?9\d{2}\s?\d{3}\s?\d{4}|\b09\d{2}\s?\d{3}\s?\d{4})\b/;
+
+/** "*63 997 573 8025" -> "+639975738025" */
+const cleanPhone = (s: string) => {
+  const d = s.replace(/\D/g, '');
+  return d.startsWith('09') ? d : `+${d.slice(-12)}`;
+};
 
 function parseType(text: string): TxnType {
   const t = text.toLowerCase();
@@ -165,19 +172,34 @@ function parseType(text: string): TxnType {
   return 'Other';
 }
 
+/**
+ * Removes photo noise around a name: "|" / brackets (screen edges, cracks) and stray single
+ * lowercase letters at either end ("i JO•••N M. | |" -> "JO•••N M.").
+ */
+function cleanName(s: string): string {
+  return s
+    .replace(/[|[\]{}]/g, ' ')
+    .trim()
+    .replace(/^(?:[a-z\W]\s+)+/, '')
+    .replace(/(?:\s+[a-z\W])+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function parseRecipient(lines: string[], phoneLineIdx: number): string {
   const skip = /gcash|sent|receipt|successful|amount|total|ref|php|₱|\d{2}:\d{2}|^\W*$/i;
   // GCash usually shows the (masked) name directly above the mobile number.
   if (phoneLineIdx > 0) {
     for (let i = phoneLineIdx - 1; i >= Math.max(0, phoneLineIdx - 2); i--) {
-      if (!skip.test(lines[i])) return lines[i].replace(/^(from|to)\s+/i, '').trim();
+      const name = cleanName(lines[i].replace(/^(from|to)\s+/i, ''));
+      if (name && !skip.test(name)) return name;
     }
   }
-  // Otherwise look for "Paid to X" / "Sent to X" / "Biller X".
+  // Otherwise look for "Paid to X" / "Sent to X" / "Biller X" ("\b": not the "To" of "Total").
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^(?:paid\s+to|sent\s+to|biller|merchant|to)\s*:?\s*(.*)$/i);
+    const m = lines[i].match(/^(?:paid\s+to|sent\s+to|biller|merchant|to)\b\s*:?\s*(.*)$/i);
     if (m) {
-      const value = m[1].trim() || lines[i + 1]?.trim() || '';
+      const value = cleanName(m[1].trim() || lines[i + 1]?.trim() || '');
       if (value && !skip.test(value)) return value;
     }
   }
@@ -236,7 +258,7 @@ export function parseGcashReceipt(rawText: string): ParsedReceipt {
   const text = lines.join('\n');
 
   const phoneIdx = lines.findIndex((l) => PHONE.test(l));
-  const phone = phoneIdx >= 0 ? (lines[phoneIdx].match(PHONE)?.[1] ?? '').replace(/\s+/g, '') : '';
+  const phone = phoneIdx >= 0 ? cleanPhone(lines[phoneIdx].match(PHONE)?.[1] ?? '') : '';
 
   return {
     type: parseType(text),

@@ -245,6 +245,10 @@ export const api = {
     bankName?: string;
     accountLast4?: string;
     refNo?: string;
+    receiptName?: string;
+    receiptPhone?: string;
+    receiptDate?: string;
+    rawText?: string;
     proof?: { mime: string; base64: string } | null;
   }) =>
     request<{ id: number }>('POST', 'cashin', b),

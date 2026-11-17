@@ -168,6 +168,11 @@ const SCHEMA = [
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
   // v10: "Send Money" receipts are the store's cash-ins (owner sends GCash to the customer).
   `UPDATE transactions SET type = 'Cash In' WHERE type = 'Send Money'`,
+  // v11: what the tindera's scan read from a cash-out / payment receipt, kept for the transaction saved later.
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS receipt_name TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS receipt_phone TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS receipt_date TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS raw_text TEXT NOT NULL DEFAULT ''`,
 ];
 
 /** Creates tables on first use (idempotent), so there is no separate migration step. */

@@ -65,6 +65,70 @@ export interface CropBox {
 }
 
 /**
+ * Finds the receipt card (the big white panel) in RGBA pixels: the tallest band of rows that are
+ * mostly near-white, then the columns inside it that are mostly near-white. Small gaps (text lines,
+ * dividers) are bridged. Returns null if there's no clear card, or it already fills the image.
+ */
+export function cardBoxFromPixels(d: Uint8ClampedArray | Uint8Array, w: number, h: number): CropBox | null {
+  const white = (i: number) => {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    return Math.min(r, g, b) > 150 && Math.max(r, g, b) - Math.min(r, g, b) < 70;
+  };
+  const longestRun = (ok: boolean[], gap: number) => {
+    let best: [number, number] | null = null;
+    let start = -1;
+    let miss = 0;
+    for (let i = 0; i <= ok.length; i++) {
+      if (i < ok.length && ok[i]) {
+        if (start < 0) start = i;
+        miss = 0;
+      } else if (start >= 0 && (++miss > gap || i === ok.length)) {
+        const end = i - miss; // last good index
+        if (!best || end - start > best[1] - best[0]) best = [start, end];
+        start = -1;
+        miss = 0;
+      }
+    }
+    return best;
+  };
+  const rowOk: boolean[] = [];
+  for (let y = 0; y < h; y++) {
+    let n = 0;
+    for (let x = 0; x < w; x++) if (white((y * w + x) * 4)) n++;
+    rowOk.push(n > w * 0.45);
+  }
+  const rows = longestRun(rowOk, Math.ceil(h * 0.03));
+  if (!rows) return null;
+  const colOk: boolean[] = [];
+  for (let x = 0; x < w; x++) {
+    let n = 0;
+    for (let y = rows[0]; y <= rows[1]; y++) if (white((y * w + x) * 4)) n++;
+    colOk.push(n > (rows[1] - rows[0] + 1) * 0.45);
+  }
+  const cols = longestRun(colOk, Math.ceil(w * 0.03));
+  if (!cols) return null;
+  const pad = 0.015;
+  const x = Math.max(0, cols[0] / w - pad);
+  const y = Math.max(0, rows[0] / h - pad);
+  const box = { x, y, w: Math.min(1, (cols[1] + 1) / w + pad) - x, h: Math.min(1, (rows[1] + 1) / h + pad) - y };
+  const area = box.w * box.h;
+  // Too small to be the receipt, or basically the whole photo (nothing to gain from cropping).
+  if (box.w < 0.3 || box.h < 0.2 || area < 0.12 || area > 0.85) return null;
+  return box;
+}
+
+/** Where the receipt card is in a photo of a phone screen (see cardBoxFromPixels), or null. */
+export async function findReceiptCard(file: Blob): Promise<CropBox | null> {
+  try {
+    const small = await drawScaled(file, 240);
+    const px = small.getContext('2d')!.getImageData(0, 0, small.width, small.height);
+    return cardBoxFromPixels(px.data, small.width, small.height);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Copy used only for text recognition.
  * - crop: keep just the receipt (photos of a phone screen have lots of background that confuses OCR)
  * - enhance: grayscale + contrast stretch, which helps a lot with glare / beige screens / cracks

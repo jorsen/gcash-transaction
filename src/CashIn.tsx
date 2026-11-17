@@ -3,7 +3,7 @@ import { api, blobToPayload, KIND_INFO, proofUrl, type CashinRequest, type Reque
 import { BlobImage } from './BlobImage';
 import { CameraSheet } from './CameraSheet';
 import { CropSheet } from './CropSheet';
-import { compressForStorage, isScreenshot, type CropBox } from './image';
+import { compressForStorage, findReceiptCard, isScreenshot, type CropBox } from './image';
 import { recognizePasses } from './ocr';
 import { looksLikeBankTransfer, parseBankTransfer } from './parseBank';
 import { countOf, majority, parseGcashReceipt, voteAmount } from './parseGcash';
@@ -121,6 +121,11 @@ interface Scanned {
   last4: string;
   /** "YYYY-MM-DD HH:mm" or "" */
   txnDate: string;
+  /** GCash receipts: the (masked) name and number the money was sent to, as shown on the receipt. */
+  sentToName: string;
+  sentToPhone: string;
+  /** All the text read, kept with the record. */
+  rawText: string;
 }
 
 /** Cash-out / payment receipts older than this many days (calendar days) are refused. */
@@ -232,56 +237,26 @@ export function CashIn({
   const setBankField = (k: keyof typeof bank, v: string) => setBank((b) => ({ ...b, [k]: v }));
 
   /**
-   * Read the customer's receipt photo (only the framed part). It's read 3 times; every detail is the
-   * value most readings agree on, and the amount must come out the same at least twice to be trusted.
+   * Read the customer's receipt photo, once per area in `crops` (undefined = the whole photo), 3 times each.
+   * Every detail is the value most readings agree on, and the amount must come out the same at least twice
+   * to be trusted. Stops early once everything (amount, ref no., date) has been read.
    */
-  const scanProof = async (file: Blob, crop?: CropBox): Promise<Scanned | null> => {
+  const scanProof = async (file: Blob, crops: (CropBox | undefined)[]): Promise<Scanned | null> => {
     setCropFile(null);
     setProof(file);
     setScanned(null);
     setScanning(true);
     setScanMsg('Reading receipt…');
     try {
-      const texts = await recognizePasses(file, (p) => setScanMsg(p), { crop, enhance: true, multiPass: true, plainPass: true });
-      const text = texts.join('\n');
-      const { amount, votes, conflicts } = voteAmount(texts);
-      let s: Scanned;
-      if (looksLikeBankTransfer(text)) {
-        const per = texts.map(parseBankTransfer);
-        const all = parseBankTransfer(text);
-        const txnDate = majority(per.map((p) => p.txnDate));
-        s = {
-          source: 'bank',
-          channel: all.channel || 'Bank transfer',
-          amount,
-          votes,
-          conflicts,
-          dateSure: countOf(per.map((p) => p.txnDate), txnDate) >= 2,
-          refNo: majority(per.map((p) => p.refNo)) || all.refNo,
-          name: (majority(per.map((p) => p.from.name)) || all.from.name).toUpperCase(),
-          bankName: majority(per.map((p) => p.from.bank)) || all.from.bank,
-          last4: majority(per.map((p) => p.from.last4)) || all.from.last4,
-          txnDate: txnDate || all.txnDate,
-        };
-      } else {
-        const per = texts.map(parseGcashReceipt);
-        const txnDate = majority(per.map((p) => p.txnDate));
-        s = {
-          source: 'gcash',
-          channel: 'GCash',
-          amount,
-          votes,
-          conflicts,
-          dateSure: countOf(per.map((p) => p.txnDate), txnDate) >= 2,
-          refNo: majority(per.map((p) => p.refNo)),
-          name: '',
-          bankName: '',
-          last4: '',
-          txnDate,
-        };
+      const texts: string[] = [];
+      let s: Scanned | null = null;
+      for (const crop of crops) {
+        texts.push(...(await recognizePasses(file, (p) => setScanMsg(p), { crop, enhance: true, multiPass: true, plainPass: true })));
+        s = scannedFrom(texts);
+        if (!scanProblem(s) && s.refNo && s.txnDate) break;
       }
       setScanned(s);
-      setSource(s.source);
+      if (s) setSource(s.source);
       setScanMsg('');
       return s;
     } catch (e) {
@@ -292,13 +267,59 @@ export function CashIn({
     }
   };
 
+  /** Combines all readings of the receipt into its details. */
+  const scannedFrom = (texts: string[]): Scanned => {
+    const text = texts.join('\n');
+    const { amount, votes, conflicts } = voteAmount(texts);
+    if (looksLikeBankTransfer(text)) {
+      const per = texts.map(parseBankTransfer);
+      const all = parseBankTransfer(text);
+      const txnDate = majority(per.map((p) => p.txnDate));
+      return {
+        source: 'bank',
+        channel: all.channel || 'Bank transfer',
+        amount,
+        votes,
+        conflicts,
+        dateSure: countOf(per.map((p) => p.txnDate), txnDate) >= 2,
+        refNo: majority(per.map((p) => p.refNo)) || all.refNo,
+        name: (majority(per.map((p) => p.from.name)) || all.from.name).toUpperCase(),
+        bankName: majority(per.map((p) => p.from.bank)) || all.from.bank,
+        last4: majority(per.map((p) => p.from.last4)) || all.from.last4,
+        txnDate: txnDate || all.txnDate,
+        sentToName: '',
+        sentToPhone: '',
+        rawText: text,
+      };
+    }
+    const per = texts.map(parseGcashReceipt);
+    const txnDate = majority(per.map((p) => p.txnDate));
+    return {
+      source: 'gcash',
+      channel: 'GCash',
+      amount,
+      votes,
+      conflicts,
+      dateSure: countOf(per.map((p) => p.txnDate), txnDate) >= 2,
+      refNo: majority(per.map((p) => p.refNo)),
+      name: '',
+      bankName: '',
+      last4: '',
+      txnDate,
+      sentToName: majority(per.map((p) => p.recipient)),
+      sentToPhone: majority(per.map((p) => p.phone)),
+      rawText: text,
+    };
+  };
+
   /**
-   * New photo (camera or upload): read it right away. If the whole photo doesn't read clearly
-   * (e.g. a photo of the customer's phone with background around it), open the framing step
-   * so only the receipt is read.
+   * New photo (camera or upload): read it right away. A camera photo of a phone is read on just the
+   * white receipt card first (much less background noise), then on the whole photo if something is
+   * still missing; the readings are combined. If it still doesn't read clearly, open the framing step.
    */
   const readImage = async (file: Blob) => {
-    const s = await scanProof(file);
+    const card = (await isScreenshot(file)) ? null : await findReceiptCard(file);
+    const s = await scanProof(file, card ? [card, undefined] : [undefined]);
     if ((!s || scanProblem(s)) && !(await isScreenshot(file))) setCropFile(file);
   };
   const attachInput = useRef<HTMLInputElement>(null);
@@ -399,6 +420,10 @@ export function CashIn({
           bankName: scanned.bankName,
           accountLast4: scanned.last4,
           refNo: scanned.refNo,
+          receiptName: scanned.sentToName,
+          receiptPhone: scanned.sentToPhone,
+          receiptDate: scanned.txnDate,
+          rawText: scanned.rawText,
           proof: await blobToPayload(await compressForStorage(proof).catch(() => proof)),
         });
         ui.toast(`Sent to the owner: ${KIND_INFO[kind].label} ${peso(scanned.amount as number)}`);
@@ -688,6 +713,16 @@ export function CashIn({
                     <dd className="mono">{scanned.name}</dd>
                   </>
                 )}
+                {(scanned.sentToName || scanned.sentToPhone) && (
+                  <>
+                    <dt>Sent to</dt>
+                    <dd className="mono">
+                      {scanned.sentToName && <MaskedName name={scanned.sentToName} className="" />}
+                      {scanned.sentToName && scanned.sentToPhone && ' · '}
+                      {scanned.sentToPhone}
+                    </dd>
+                  </>
+                )}
                 <dt>Reference No.</dt>
                 <dd className="mono">{scanned.refNo || '—'}</dd>
                 <dt>Date</dt>
@@ -866,7 +901,7 @@ export function CashIn({
           file={cropFile}
           title="Frame just the receipt to read it clearly"
           onCancel={() => setCropFile(null)}
-          onDone={(crop) => scanProof(cropFile, crop)}
+          onDone={(crop) => scanProof(cropFile, [crop])}
         />
       )}
       {proofView !== null && (

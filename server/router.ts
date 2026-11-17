@@ -703,6 +703,11 @@ async function route(req: Request): Promise<Response> {
       bankName?: string;
       accountLast4?: string;
       refNo?: string;
+      /** Read from the receipt: the name / number shown on it, its date ("YYYY-MM-DD HH:mm") and the raw OCR text. */
+      receiptName?: string;
+      receiptPhone?: string;
+      receiptDate?: string;
+      rawText?: string;
       /** Photo of the customer's transfer receipt (proof). */
       proof?: { mime: string; base64: string } | null;
     }>(req);
@@ -743,10 +748,22 @@ async function route(req: Request): Promise<Response> {
     }
     amount = Math.round(amount * 100) / 100;
     const note = String(b.note ?? '').trim().slice(0, 500);
+    // Best-effort details read from the receipt (OCR): never rejected, just dropped if they don't look right.
+    const receiving = kind !== 'cashin';
+    const receiptName = receiving ? normalizeMaskedName(String(b.receiptName ?? '')).toUpperCase().slice(0, 80) : '';
+    let receiptPhone = '';
+    try {
+      if (receiving && String(b.receiptPhone ?? '').trim()) receiptPhone = cleanMobile(b.receiptPhone);
+    } catch {
+      // unreadable number: leave it blank
+    }
+    const receiptDate = receiving && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(String(b.receiptDate ?? '')) ? String(b.receiptDate) : '';
+    const rawText = receiving ? String(b.rawText ?? '').slice(0, 20000) : '';
     const [row] = await query<{ id: number }>(
-      `INSERT INTO cashin_requests (business_id, created_by, number, gcash_name, amount, note, kind, source, bank_name, account_last4, ref_no)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-      [businessId, me.id, number, gcashName, amount, note, kind, source, bankName, accountLast4, refNo],
+      `INSERT INTO cashin_requests (business_id, created_by, number, gcash_name, amount, note, kind, source, bank_name, account_last4, ref_no,
+                                    receipt_name, receipt_phone, receipt_date, raw_text)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
+      [businessId, me.id, number, gcashName, amount, note, kind, source, bankName, accountLast4, refNo, receiptName, receiptPhone, receiptDate, rawText],
     );
     if (proof) {
       await query(`INSERT INTO request_proofs (request_id, mime, data) VALUES ($1, $2, decode($3, 'base64'))`, [row.id, proof.mime, proof.base64]);
@@ -883,10 +900,15 @@ async function route(req: Request): Promise<Response> {
       refNo: string;
       note: string;
       createdByName: string;
+      receiptName: string;
+      receiptPhone: string;
+      receiptDate: string;
+      rawText: string;
     }>(
       `SELECT c.business_id AS "businessId", c.created_by AS "createdBy", c.status, c.number, c.gcash_name AS "gcashName",
               c.amount::float8 AS amount, c.kind, c.source, c.bank_name AS "bankName", c.account_last4 AS "accountLast4",
-              c.ref_no AS "refNo", c.note, u.name AS "createdByName"
+              c.ref_no AS "refNo", c.note, u.name AS "createdByName", c.receipt_name AS "receiptName",
+              c.receipt_phone AS "receiptPhone", c.receipt_date AS "receiptDate", c.raw_text AS "rawText"
          FROM cashin_requests c JOIN users u ON u.id = c.created_by WHERE c.id = $1`,
       [id],
     );
@@ -927,8 +949,9 @@ async function route(req: Request): Promise<Response> {
       const via = r.source === 'bank' ? `${r.bankName || 'bank'}${r.accountLast4 ? ` ••${r.accountLast4}` : ''} (InstaPay/bank)` : 'GCash';
       const [t] = await query<{ id: number }>(
         `INSERT INTO transactions (type, amount, ref_no, recipient, phone, txn_date, note, raw_text, created_by, business_id)
-         VALUES ($9, $1, $2, $3, $4, $5, $6, '', $7, $8) RETURNING id`,
-        [r.amount, r.refNo, r.gcashName, r.number, phNow(), `${r.kind === 'payment' ? 'Payment' : 'Cash-out'} from ${via} · requested by ${r.createdByName}${r.note ? ` · ${r.note}` : ''}`, r.createdBy, r.businessId, r.kind === 'payment' ? 'Payment' : 'Received'],
+         VALUES ($9, $1, $2, $3, $4, $5, $6, $10, $7, $8) RETURNING id`,
+        // Name, number and date as read from the customer's receipt; "now" if the date couldn't be read.
+        [r.amount, r.refNo, r.gcashName || r.receiptName, r.number || r.receiptPhone, r.receiptDate || phNow(), `${r.kind === 'payment' ? 'Payment' : 'Cash-out'} from ${via} · requested by ${r.createdByName}${r.note ? ` · ${r.note}` : ''}`, r.createdBy, r.businessId, r.kind === 'payment' ? 'Payment' : 'Received', r.rawText],
       );
       await query(
         `INSERT INTO receipt_images (txn_id, mime, data) SELECT $1, mime, data FROM request_proofs WHERE request_id = $2`,
