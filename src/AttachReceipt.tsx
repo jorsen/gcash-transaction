@@ -7,7 +7,7 @@ import { compressForStorage } from './image';
 import { recognizePasses } from './ocr';
 import { formatDateTime, parseGcashPasses, parseGcashReceipt, type ParsedReceipt, type TxnType } from './parseGcash';
 import { markLocalAction, playChime } from './sound';
-import { Icon, SkeletonRows, useUi } from './ui';
+import { Icon, Lightbox, SkeletonRows, useUi } from './ui';
 
 const prettyNumber = (n: string) => n.replace(/^(\d{4})(\d{3})(\d{4})$/, '$1 $2 $3');
 const letters = (s: string) => s.toUpperCase().replace(/[^A-Z]/g, '');
@@ -63,6 +63,7 @@ export function AttachReceipt({
   const [selected, setSelected] = useState<number | null>(requestId ?? null);
   const [touched, setTouched] = useState(requestId !== undefined);
   const [saving, setSaving] = useState(false);
+  const [viewing, setViewing] = useState(false);
 
   useEffect(() => {
     api
@@ -164,7 +165,9 @@ export function AttachReceipt({
       <main className="content">
         <div className="attach-top">
           <div className="attach-thumb">
-            <BlobImage blob={file} alt="Shared GCash receipt" />
+            <button type="button" className="attach-thumb-btn" aria-label="View full receipt" onClick={() => setViewing(true)}>
+              <BlobImage blob={file} alt="Shared GCash receipt" />
+            </button>
           </div>
           <div className="attach-read">
             {reading ? (
@@ -236,6 +239,12 @@ export function AttachReceipt({
           {saving ? 'Saving…' : reading ? 'Reading receipt…' : !chosen && requests?.length ? 'Pick a request above' : doneLabel}
         </button>
       </div>
+
+      {viewing && (
+        <Lightbox onClose={() => setViewing(false)}>
+          <BlobImage blob={file} alt="Shared GCash receipt" />
+        </Lightbox>
+      )}
     </div>
   );
 }

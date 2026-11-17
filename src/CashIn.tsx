@@ -9,7 +9,7 @@ import { looksLikeBankTransfer, parseBankTransfer } from './parseBank';
 import { countOf, majority, parseGcashReceipt, voteAmount } from './parseGcash';
 import { peso, prettyDate } from './format';
 import { markLocalAction } from './sound';
-import { Icon, SkeletonRows, useUi } from './ui';
+import { Icon, Lightbox, SkeletonRows, useUi } from './ui';
 
 /** "09171234567" -> "0917 123 4567" */
 const prettyNumber = (n: string) => n.replace(/^(\d{4})(\d{3})(\d{4})$/, '$1 $2 $3');
@@ -905,9 +905,9 @@ export function CashIn({
         />
       )}
       {proofView !== null && (
-        <div className="zoom" onClick={() => setProofView(null)}>
+        <Lightbox onClose={() => setProofView(null)} label="Customer's transfer receipt">
           <img src={proofUrl(proofView)} alt="Customer's transfer receipt" />
-        </div>
+        </Lightbox>
       )}
     </>
   );

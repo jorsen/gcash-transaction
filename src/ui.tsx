@@ -2,6 +2,37 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { PasswordInput } from './PasswordInput';
 
 /* ------------------------------------------------------------------ */
+/* Lightbox: full-screen picture with an X to close                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Shows a picture full screen on a dark backdrop. Closes with the X, a tap on the backdrop,
+ * or Escape. Pinch-zoom works on the picture (it isn't closed by tapping the picture itself).
+ */
+export function Lightbox({ onClose, children, label = 'Receipt' }: { onClose: () => void; children: ReactNode; label?: string }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden'; // the page behind doesn't scroll
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = overflow;
+    };
+  }, [onClose]);
+  return (
+    <div className="lightbox" role="dialog" aria-modal="true" aria-label={label} onClick={onClose}>
+      <button type="button" className="lightbox-close" aria-label="Close" onClick={onClose}>
+        <Icon name="close" size={26} />
+      </button>
+      <div className="lightbox-body" onClick={(e) => e.stopPropagation()}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Icons (inline SVG, inherit currentColor)                            */
 /* ------------------------------------------------------------------ */
 

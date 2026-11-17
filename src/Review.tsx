@@ -3,7 +3,7 @@ import { api, blobToPayload, imageUrl, type TxnPayload, type User } from './api'
 import { BlobImage } from './BlobImage';
 import { peso, prettyDate } from './format';
 import { markLocalAction } from './sound';
-import { Icon, useUi } from './ui';
+import { Icon, Lightbox, useUi } from './ui';
 import { compressForStorage } from './image';
 import { recognizePasses } from './ocr';
 import { formatDateTime, parseGcashPasses, parseGcashReceipt, TXN_TYPES, type TxnType } from './parseGcash';
@@ -353,11 +353,7 @@ export function Review({
         </div>
       )}
 
-      {zoom && hasImage && (
-        <div className="zoom" onClick={() => setZoom(false)}>
-          {imageEl}
-        </div>
-      )}
+      {zoom && hasImage && <Lightbox onClose={() => setZoom(false)}>{imageEl}</Lightbox>}
     </div>
   );
 }
