@@ -529,3 +529,16 @@ button.activity-row:active { transform: scale(0.99); }
   .cashin-card.kind-payment .cashin-amount, .type-tag.payment { color: #b794f6; }
 }
 .cashin-card.done.kind-payment { border-left-color: var(--green); }
+
+/* Cash-out / payment: details read from the customer's receipt (read only). */
+.scan-result { border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; background: var(--card); }
+.scan-result.ok { border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+.scan-result.bad { border-color: color-mix(in srgb, var(--red) 55%, transparent); }
+.scan-result-head { font-weight: 800; font-size: 14px; margin-bottom: 6px; }
+.scan-result.ok .scan-result-head { color: var(--green); }
+.scan-result.bad .scan-result-head { color: var(--red); }
+.scan-problem { margin: 0 0 8px; font-size: 13px; line-height: 1.45; }
+.scan-result dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 14px; }
+.scan-result dt { color: var(--muted); }
+.scan-result dd { margin: 0; text-align: right; font-weight: 650; overflow-wrap: anywhere; }
+.scan-result .scan-amount { font-size: 20px; font-weight: 800; }

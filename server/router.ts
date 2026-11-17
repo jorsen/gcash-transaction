@@ -709,13 +709,26 @@ async function route(req: Request): Promise<Response> {
     const businessId = businessScope(me, b.businessId);
     const kind: Kind = b.kind === 'cashout' || b.kind === 'payment' ? b.kind : 'cashin';
     const source = kind !== 'cashin' && b.source === 'bank' ? 'bank' : 'gcash';
-    // Bank cash-outs have no GCash number (the money comes from a bank account).
-    const number = source === 'bank' && !String(b.number ?? '').trim() ? '' : cleanMobile(b.number);
+    // Cash-out / payment details come from the customer's receipt, which doesn't show their own number.
+    const number = kind !== 'cashin' && !String(b.number ?? '').trim() ? '' : cleanMobile(b.number);
     const bankName = source === 'bank' ? String(b.bankName ?? '').trim().slice(0, 60) : '';
     const accountLast4 = source === 'bank' ? String(b.accountLast4 ?? '').replace(/\D/g, '').slice(-4) : '';
     const refNo = String(b.refNo ?? '').replace(/\s+/g, '').toUpperCase().slice(0, 40);
     if (source === 'bank' && !bankName) throw new HttpError(400, 'Enter the bank the customer sent from.');
     const proof = cleanImage(b.proof);
+    if (kind !== 'cashin' && !proof) throw new HttpError(400, "Scan the customer's receipt first.");
+    // The same receipt can't be used twice (e.g. an old screenshot shown again).
+    if (kind !== 'cashin' && refNo) {
+      const [dup] = await query<{ at: string }>(
+        `SELECT to_char(created_at AT TIME ZONE 'Asia/Manila', 'Mon DD, HH12:MI AM') AS at FROM cashin_requests
+          WHERE business_id = $1 AND upper(ref_no) = $2 AND status <> 'cancelled'
+         UNION ALL
+         SELECT txn_date FROM transactions WHERE business_id = $1 AND upper(ref_no) = $2
+         LIMIT 1`,
+        [businessId, refNo],
+      );
+      if (dup) throw new HttpError(409, `This receipt (Ref ${refNo}) was already used (${dup.at}). Ask the customer for their new receipt.`);
+    }
     // Typed asterisks / OCR junk become GCash-style dots: "JU** DE*A C." -> "JU•• DE•A C."
     const gcashName = normalizeMaskedName(String(b.gcashName ?? '')).toUpperCase();
     // Cash-in needs the receiver's GCash name to check before sending; for cash-out it's optional.

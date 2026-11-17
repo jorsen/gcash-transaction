@@ -265,3 +265,20 @@ export function parseGcashPasses(texts: string[]): ParsedReceipt {
   p.amount = pickAmount(texts) ?? p.amount;
   return p;
 }
+
+/** Amount most readings agree on, and how many readings gave it (to judge if the scan is trustworthy). */
+export function voteAmount(texts: string[]): { amount: number | null; votes: number } {
+  const amount = pickAmount(texts);
+  if (amount === null) return { amount: null, votes: 0 };
+  const votes = texts.filter((t) => parseAmount(t.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) === amount).length;
+  return { amount, votes };
+}
+
+/** The value most readings agree on ('' if none). Ties go to the earlier reading. */
+export function majority(values: string[]): string {
+  const counts = new Map<string, number>();
+  for (const v of values) if (v) counts.set(v, (counts.get(v) ?? 0) + 1);
+  let best = '';
+  for (const [v, c] of counts) if (!best || c > counts.get(best)!) best = v;
+  return best;
+}
