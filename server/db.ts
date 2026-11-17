@@ -117,6 +117,9 @@ const SCHEMA = [
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`,
   `CREATE INDEX IF NOT EXISTS cashin_requests_business_idx ON cashin_requests (business_id, status, created_at)`,
+  // v4: cash-out requests, and the GCash receipt attached when the owner completes a request.
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'cashin'`,
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS txn_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL`,
 ];
 
 /** Creates tables on first use (idempotent), so there is no separate migration step. */

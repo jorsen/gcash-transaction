@@ -53,6 +53,8 @@ export function Review({
   /** URL of the image already stored in the cloud (when editing). */
   const [savedImageUrl, setSavedImageUrl] = useState<string | null>(null);
   const [createdByName, setCreatedByName] = useState('');
+  /** A tindera viewing the GCash receipt the owner attached to her request: look, don't edit. */
+  const [readOnly, setReadOnly] = useState(false);
   const [rawText, setRawText] = useState('');
   const [form, setForm] = useState<Form>(emptyForm);
   const [loading, setLoading] = useState(id !== undefined);
@@ -116,6 +118,7 @@ export function Review({
           setSavedImageUrl(t.hasImage ? imageUrl(t) : null);
           setRawText(t.rawText ?? '');
           setCreatedByName(t.createdByName);
+          setReadOnly(user.role === 'tindera' && t.createdBy !== user.id);
           setForm({
             type: t.type,
             amount: t.amount.toFixed(2),
@@ -247,7 +250,8 @@ export function Review({
         )}
       </header>
 
-      <main className="content">
+      <main className={`content ${readOnly ? 'read-only' : ''}`}>
+        {readOnly && <div className="notice">GCash receipt attached by {createdByName} for your request (view only).</div>}
         {loading ? (
           <div className="center">
             <span className="spinner big" />
@@ -324,7 +328,14 @@ export function Review({
         )}
       </main>
 
-      {!loading && (
+      {!loading && readOnly && (
+        <div className="sticky-actions">
+          <button className="btn primary" onClick={onDone}>
+            Close
+          </button>
+        </div>
+      )}
+      {!loading && !readOnly && (
         <div className="sticky-actions">
           <button className="btn secondary" onClick={onDone} disabled={saving}>
             Cancel

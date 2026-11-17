@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { api, type CashinRequest, type User } from './api';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { api, type CashinRequest, type RequestKind, type User } from './api';
 import { peso } from './format';
 import { markLocalAction } from './sound';
 import { Icon, SkeletonRows, useUi } from './ui';
@@ -82,6 +82,8 @@ export function CashIn({
   businessId,
   onPendingChange,
   liveStamp,
+  onAttach,
+  onViewReceipt,
 }: {
   user: User;
   /** Super admin: the business being viewed; null otherwise. */
@@ -89,6 +91,10 @@ export function CashIn({
   onPendingChange: (n: number) => void;
   /** Changes whenever a cash-in request is added or handled (realtime). */
   liveStamp: string | null;
+  /** Owner: attach a GCash receipt image to a request (opens the attach screen). */
+  onAttach: (file: Blob, requestId: number) => void;
+  /** Open the GCash receipt attached to a finished request. */
+  onViewReceipt: (txnId: number) => void;
 }) {
   const ui = useUi();
   const isManager = user.role !== 'tindera';
@@ -100,6 +106,9 @@ export function CashIn({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [form, setForm] = useState({ number: '', gcashName: '', amount: '', note: '' });
+  const [kind, setKind] = useState<RequestKind>('cashin');
+  const attachInput = useRef<HTMLInputElement>(null);
+  const attachFor = useRef<number | null>(null);
   const [formError, setFormError] = useState('');
   const [sending, setSending] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
@@ -165,7 +174,7 @@ export function CashIn({
     setSending(true);
     try {
       markLocalAction();
-      await api.addCashin({ ...form, number: digits, businessId });
+      await api.addCashin({ ...form, number: digits, businessId, kind });
       ui.toast(`Sent to the owner: ${form.number}`);
       setForm({ number: '', gcashName: '', amount: '', note: '' });
       setAutoFilled(false);
@@ -203,7 +212,7 @@ export function CashIn({
     try {
       markLocalAction();
       await api.updateCashin(r.id, status);
-      ui.toast(status === 'done' ? 'Marked as sent' : 'Request cancelled', status === 'done' ? 'success' : 'info');
+      ui.toast(status === 'done' ? (r.kind === 'cashout' ? 'Marked as received' : 'Marked as sent') : 'Request cancelled', status === 'done' ? 'success' : 'info');
       await load();
     } catch (err) {
       ui.toast(err instanceof Error ? err.message : String(err), 'error');
@@ -215,21 +224,29 @@ export function CashIn({
   const pending = items.filter((r) => r.status === 'pending');
   const finished = items.filter((r) => r.status !== 'pending');
 
+  const doneWord = (r: CashinRequest) => (r.kind === 'cashout' ? 'Received' : 'Sent');
   const card = (r: CashinRequest) => (
-    <li key={r.id} className={`cashin-card ${r.status}`}>
+    <li key={r.id} className={`cashin-card ${r.status} kind-${r.kind}`}>
+      <span className={`kind-badge ${r.kind}`}>{r.kind === 'cashout' ? 'Cash out' : 'Cash in'}</span>
       <div className="cashin-top">
         <span className="cashin-number">{prettyNumber(r.number)}</span>
         {r.amount !== null && <span className="cashin-amount">{peso(r.amount)}</span>}
       </div>
-      <MaskedName name={r.gcashName} />
+      {r.gcashName && <MaskedName name={r.gcashName} />}
       {r.note && <div className="row-sub">{r.note}</div>}
       <div className="row-sub">
         {isManager ? `From ${r.createdByName} · ` : ''}
         {timeAgo(r.createdAt)}
         {r.status !== 'pending' &&
-          ` · ${r.status === 'done' ? 'Sent' : 'Cancelled'}${r.handledByName ? ` by ${r.handledByName}` : ''}${r.handledAt ? ` ${timeAgo(r.handledAt)}` : ''}`}
+          ` · ${r.status === 'done' ? doneWord(r) : 'Cancelled'}${r.handledByName ? ` by ${r.handledByName}` : ''}${r.handledAt ? ` ${timeAgo(r.handledAt)}` : ''}`}
       </div>
+      {r.status === 'done' && r.txnId && (
+        <button className="pill-btn receipt-link" onClick={() => onViewReceipt(r.txnId as number)}>
+          <Icon name="receipt" size={16} /> View GCash receipt
+        </button>
+      )}
       {r.status === 'pending' && (
+        <>
         <div className="cashin-actions">
           <button className={`btn primary copy-btn ${copiedId === r.id ? 'copied' : ''}`} onClick={() => copy(r)}>
             <Icon name={copiedId === r.id ? 'check' : 'copy'} size={18} />
@@ -237,7 +254,7 @@ export function CashIn({
           </button>
           {isManager && (
             <button className="btn done-btn" onClick={() => update(r, 'done')} disabled={busyId === r.id}>
-              <Icon name="check" size={18} /> Done
+              <Icon name="check" size={18} /> {doneWord(r)}
             </button>
           )}
           {(isManager || r.createdBy === user.id) && (
@@ -246,29 +263,56 @@ export function CashIn({
             </button>
           )}
         </div>
+        {isManager && (
+          <button
+            className="pill-btn attach-btn"
+            onClick={() => {
+              attachFor.current = r.id;
+              attachInput.current?.click();
+            }}
+          >
+            <Icon name="image" size={16} /> Attach GCash receipt &amp; mark {doneWord(r).toLowerCase()}
+          </button>
+        )}
+        </>
       )}
-      {r.status !== 'pending' && <span className={`status-pill ${r.status}`}>{r.status === 'done' ? 'Sent' : 'Cancelled'}</span>}
+      {r.status !== 'pending' && <span className={`status-pill ${r.status}`}>{r.status === 'done' ? doneWord(r) : 'Cancelled'}</span>}
     </li>
   );
 
   const formEl = canCreate && !formOpen && (
     <button className="btn secondary block new-request-btn" onClick={() => setFormOpen(true)}>
-      <Icon name="plus" size={20} /> New cash-in request
+      <Icon name="plus" size={20} /> New cash-in / cash-out request
     </button>
   );
 
   const form_ = canCreate && formOpen && (
         <form className="card form" onSubmit={submit}>
           <div className="card-head">
-            <h2>New cash-in request</h2>
+            <h2>New request</h2>
             {isManager && (
               <button type="button" className="icon-btn subtle" aria-label="Close" onClick={() => setFormOpen(false)}>
                 <Icon name="close" size={18} />
               </button>
             )}
           </div>
+          <div className="field">
+            <div className="segmented kind-toggle" role="tablist">
+              <button type="button" role="tab" aria-selected={kind === 'cashin'} className={kind === 'cashin' ? 'active' : ''} onClick={() => setKind('cashin')}>
+                Cash in
+              </button>
+              <button type="button" role="tab" aria-selected={kind === 'cashout'} className={kind === 'cashout' ? 'active' : ''} onClick={() => setKind('cashout')}>
+                Cash out
+              </button>
+            </div>
+            <span className="hint">
+              {kind === 'cashin'
+                ? 'Customer pays cash; the owner sends GCash to their number.'
+                : 'Customer sends GCash to the store; the owner confirms, then you give the cash.'}
+            </span>
+          </div>
           <label className="field">
-            <span className="label">Customer's GCash number</span>
+            <span className="label">{kind === 'cashin' ? "Customer's GCash number" : "Customer's GCash number (sender)"}</span>
             <input
               className={`input number-input ${status ? (status.ok ? 'valid' : 'invalid') : ''}`}
               type="tel"
@@ -298,7 +342,7 @@ export function CashIn({
             )}
           </label>
           <label className="field">
-            <span className="label">GCash name</span>
+            <span className="label">{kind === 'cashin' ? 'GCash name' : 'GCash name (optional)'}</span>
             <input
               className="input mono"
               placeholder="e.g. JU•• DE•A C."
@@ -311,7 +355,7 @@ export function CashIn({
               autoComplete="off"
               autoCorrect="off"
               spellCheck={false}
-              required
+              required={kind === 'cashin'}
             />
             {autoFilled ? (
               <span className="hint known">Filled in from this customer's last transaction. Check it matches GCash.</span>
@@ -386,9 +430,24 @@ export function CashIn({
     </>
   );
 
+  const attachPicker = (
+    <input
+      ref={attachInput}
+      type="file"
+      accept="image/*"
+      hidden
+      onChange={(e) => {
+        const f = e.target.files?.[0];
+        e.target.value = '';
+        if (f && attachFor.current !== null) onAttach(f, attachFor.current);
+      }}
+    />
+  );
+
   // Tindera: form first. Owner: waiting requests first, form behind a button.
   return isManager ? (
     <>
+      {attachPicker}
       {listEl}
       {formEl}
       {form_}

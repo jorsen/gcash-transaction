@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { api, imageUrl, setUnauthorizedHandler, type StaffUser, type Summary, type Txn, type User } from './api';
+import { AttachReceipt } from './AttachReceipt';
 import { exportCsv, uploadLocalRecords } from './backup';
 import { Businesses } from './Businesses';
 import { CashIn, MaskedName } from './CashIn';
@@ -9,13 +10,17 @@ import { useLiveStamp } from './live';
 import { Login } from './Login';
 import { disablePush, enablePush, ensurePushSubscription, syncPushSubscription, unlinkPushSubscription, type PushState } from './push';
 import { Review } from './Review';
-import { playChime, recentLocalAction, setSoundEnabled, soundEnabled } from './sound';
+import { announceRequest, playChime, recentLocalAction, setSoundEnabled, soundEnabled } from './sound';
 import { Staff } from './Staff';
 import { ActionSheet, Avatar, Banner, Icon, SkeletonRows, useUi } from './ui';
 
 type Biz = { id: number; name: string };
 /** Screens pushed on top of the base screen (Businesses for the super admin, Home for everyone else). */
-type View = { name: 'biz'; biz: Biz } | { name: 'review'; file?: File; id?: number } | { name: 'staff' };
+type View =
+  | { name: 'biz'; biz: Biz }
+  | { name: 'review'; file?: File; id?: number }
+  | { name: 'staff' }
+  | { name: 'attach'; file: Blob; requestId?: number };
 type Open = (v: View) => void;
 
 interface BeforeInstallPromptEvent extends Event {
@@ -170,6 +175,9 @@ export function App() {
   if (top.name === 'review') {
     return <Review user={user} businessId={isSuper ? biz.id : null} file={top.file} id={top.id} onDone={close} />;
   }
+  if (top.name === 'attach') {
+    return <AttachReceipt user={user} businessId={isSuper ? biz.id : null} file={top.file} requestId={top.requestId} onDone={close} />;
+  }
   if (top.name === 'staff') {
     return <Staff me={user} businessId={isSuper ? biz.id : null} businessName={biz.name} onBack={close} />;
   }
@@ -220,8 +228,27 @@ function Home({
 
   // Links from notifications: "/?view=cashin" or "/?txn=123". Handle on load and while the app is open.
   useEffect(() => {
+    const openShared = async () => {
+      try {
+        const cache = await caches.open('shared-receipts');
+        const res = await cache.match('/shared-receipt');
+        if (!res) return;
+        const blob = await res.blob();
+        await cache.delete('/shared-receipt');
+        if (isOwner) {
+          setTab('cashin');
+          onOpen({ name: 'attach', file: blob });
+        } else {
+          onOpen({ name: 'review', file: new File([blob], 'gcash-receipt.jpg', { type: blob.type || 'image/jpeg' }) });
+        }
+      } catch {
+        ui.toast('Could not open the shared receipt', 'error');
+      }
+    };
     const openUrl = (href: string) => {
       const p = new URL(href, location.origin).searchParams;
+      if (p.get('share') === '1') openShared();
+      if (p.get('share') === 'failed') ui.toast('Open GCash Tracker once, then share again', 'error');
       if (p.get('view') === 'cashin') setTab('cashin');
       const txn = Number(p.get('txn'));
       if (txn) {
@@ -284,8 +311,10 @@ function Home({
     // Sounds for things other people did (never for your own actions).
     if (lastPending.current !== null && !recentLocalAction()) {
       if (isOwner && live.pending > lastPending.current) {
-        playChime('cashin');
-        ui.toast(live.pending - lastPending.current > 1 ? `${live.pending - lastPending.current} new cash-in requests` : 'New cash-in request', 'info');
+        // Chime + "Cash in po!" / "Pa-cash out po!"
+        announceRequest(live.latestKind ?? 'cashin');
+        const n = live.pending - lastPending.current;
+        ui.toast(n > 1 ? `${n} new requests` : live.latestKind === 'cashout' ? 'Pa-cash out po!' : 'Cash in po!', 'info');
       } else if (!isOwner && live.pending < lastPending.current) {
         playChime('done');
         ui.toast('The owner handled your cash-in request', 'info');
@@ -305,7 +334,7 @@ function Home({
     const next = !soundOn;
     setSoundEnabled(next);
     setSoundOn(next);
-    if (next) playChime('cashin', true);
+    if (next) announceRequest('cashin', true);
     ui.toast(next ? 'Sounds on' : 'Sounds off', 'info');
   };
 
@@ -477,7 +506,14 @@ function Home({
         )}
 
         {tab === 'cashin' ? (
-          <CashIn user={user} businessId={scopeId} onPendingChange={setPendingCashin} liveStamp={live?.cashin ?? null} />
+          <CashIn
+            user={user}
+            businessId={scopeId}
+            onPendingChange={setPendingCashin}
+            liveStamp={live?.cashin ?? null}
+            onAttach={(file, requestId) => onOpen({ name: 'attach', file, requestId })}
+            onViewReceipt={(id) => onOpen({ name: 'review', id })}
+          />
         ) : (
           <>
             <section className="summary">
@@ -653,7 +689,7 @@ function Home({
             {
               icon: 'bell' as const,
               label: soundOn ? 'Sounds: On' : 'Sounds: Off',
-              hint: soundOn ? 'Chime for new cash-ins and receipts while the app is open' : 'Tap to turn chimes back on',
+              hint: soundOn ? 'Chime + "Cash in po!" for new requests while the app is open' : 'Tap to turn sounds back on',
               onClick: toggleSound,
             },
             ...(!isSuper ? [{ icon: 'bell' as const, label: 'Notification help', hint: 'If notifications don’t arrive when the app is closed', onClick: notificationHelp }] : []),

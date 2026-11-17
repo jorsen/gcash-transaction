@@ -388,3 +388,41 @@ input.mono { text-transform: uppercase; }
 .push-pill.off { color: var(--muted); background: var(--card-2); }
 .help-list p { margin: 0 0 10px; }
 .help-list p:last-child { margin-bottom: 0; }
+
+/* ---------- cash-in / cash-out kinds, attach flow ---------- */
+.kind-badge { align-self: flex-start; font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; border-radius: 6px; padding: 2px 8px; }
+.kind-badge.cashin { background: var(--blue-soft); color: var(--blue); }
+.kind-badge.cashout { background: #fff1e0; color: #c25e00; }
+@media (prefers-color-scheme: dark) { .kind-badge.cashout { background: #3a2410; color: #ffb366; } }
+.cashin-card.kind-cashout { border-left-color: #f59e0b; }
+.cashin-card.kind-cashout .cashin-amount { color: #c25e00; }
+@media (prefers-color-scheme: dark) { .cashin-card.kind-cashout .cashin-amount { color: #ffb366; } }
+.cashin-card.done.kind-cashout { border-left-color: var(--green); }
+.attach-btn { align-self: flex-start; margin-top: 2px; }
+.receipt-link { align-self: flex-start; }
+.kind-toggle { margin-bottom: 2px; }
+.masked-name.small { font-size: 14px; }
+
+.attach-top { display: flex; gap: 14px; align-items: flex-start; }
+.attach-thumb { width: 104px; height: 170px; flex: none; border-radius: 12px; overflow: hidden; background: #0b1b33; box-shadow: var(--shadow-sm); }
+.attach-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.attach-read { flex: 1; min-width: 0; }
+.read-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; margin: 0; font-size: 14px; }
+.read-list dt { color: var(--muted); font-weight: 600; }
+.read-list dd { margin: 0; font-weight: 700; word-break: break-all; }
+
+.pick-card {
+  width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+  background: var(--card); border: 2px solid transparent; border-radius: var(--radius); padding: 12px; box-shadow: var(--shadow-sm);
+}
+.pick-card.picked { border-color: var(--blue); background: color-mix(in srgb, var(--blue-soft) 60%, var(--card)); }
+.radio { width: 22px; height: 22px; flex: none; border-radius: 50%; border: 2px solid var(--border); display: grid; place-items: center; }
+.radio.on { border-color: var(--blue); }
+.radio.on::after { content: ''; width: 12px; height: 12px; border-radius: 50%; background: var(--blue); }
+.pick-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pick-number { font-size: 17px; font-variant-numeric: tabular-nums; }
+.pick-right { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.match-pill { font-size: 11px; font-weight: 800; color: var(--green); background: var(--green-soft); border-radius: 6px; padding: 1px 7px; white-space: nowrap; }
+
+.content.read-only input, .content.read-only textarea, .content.read-only .chip, .content.read-only .pill-btn { pointer-events: none; }
+.content.read-only .image-actions { display: none; }

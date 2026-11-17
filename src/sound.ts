@@ -110,3 +110,48 @@ export function markLocalAction() {
 export function recentLocalAction(ms = 8000) {
   return Date.now() - lastLocalAction < ms;
 }
+
+/* ------------------------------------------------------------------ */
+/* Voice: "Cash in po!" / "Pa-cash out po!"                            */
+/* ------------------------------------------------------------------ */
+
+function pickVoice(): SpeechSynthesisVoice | null {
+  const voices = window.speechSynthesis?.getVoices() ?? [];
+  return (
+    voices.find((v) => /^(fil|tl)([-_]|$)/i.test(v.lang)) ?? // Filipino / Tagalog voice if the phone has one
+    voices.find((v) => /^en[-_]PH/i.test(v.lang)) ??
+    voices.find((v) => /^en/i.test(v.lang) && v.localService) ??
+    voices.find((v) => /^en/i.test(v.lang)) ??
+    null
+  );
+}
+// Voices load asynchronously on some browsers; touching getVoices() early starts that.
+if (typeof window !== 'undefined') window.speechSynthesis?.getVoices();
+
+/** Speaks a short phrase with the phone's text-to-speech (if sounds are on). */
+export function say(text: string, force = false) {
+  if ((!force && !soundEnabled()) || !('speechSynthesis' in window)) return;
+  try {
+    const u = new SpeechSynthesisUtterance(text);
+    const v = pickVoice();
+    if (v) {
+      u.voice = v;
+      u.lang = v.lang;
+    } else {
+      u.lang = 'fil-PH';
+    }
+    u.rate = 0.95;
+    u.volume = 1;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  } catch {
+    // ignore
+  }
+}
+
+/** New request alert for the owner: chime, then "Cash in po!" or "Pa-cash out po!". */
+export function announceRequest(kind: 'cashin' | 'cashout', force = false) {
+  if (!force && !soundEnabled()) return;
+  playChime('cashin', force);
+  setTimeout(() => say(kind === 'cashout' ? 'Pa cash out po!' : 'Cash in po!', force), 650);
+}

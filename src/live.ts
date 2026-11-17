@@ -8,6 +8,8 @@ export interface LiveStamp {
   cashin: string;
   /** Number of cash-in requests waiting. */
   pending: number;
+  /** Kind of the newest waiting request ("cashin" / "cashout"). */
+  latestKind: 'cashin' | 'cashout' | null;
 }
 
 const POLL_MS = 5000;
@@ -34,7 +36,7 @@ export function useLiveStamp(businessId: number | null): LiveStamp | null {
         try {
           const s = await api.changes(businessId);
           setStamp((prev) =>
-            prev && prev.receipts === s.receipts && prev.cashin === s.cashin && prev.pending === s.pending ? prev : s,
+            prev && prev.receipts === s.receipts && prev.cashin === s.cashin && prev.pending === s.pending && prev.latestKind === s.latestKind ? prev : s,
           );
         } catch {
           // offline or logged out: try again next tick

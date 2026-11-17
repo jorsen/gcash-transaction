@@ -69,8 +69,14 @@ export interface TxnPayload {
   businessId?: number;
 }
 
+export type RequestKind = 'cashin' | 'cashout';
+
 export interface CashinRequest {
   id: number;
+  /** cashin: store sends GCash to the customer. cashout: customer sends GCash to the store, store gives cash. */
+  kind: RequestKind;
+  /** GCash receipt attached when the owner completed it. */
+  txnId: number | null;
   /** "09XXXXXXXXX" */
   number: string;
   /** As GCash shows it; may contain asterisks, e.g. "JU** DE* C." */
@@ -151,7 +157,7 @@ export const api = {
   updateTransaction: (id: number, b: TxnPayload) => request<{ ok: true }>('PUT', `transactions/${id}`, b),
   deleteTransaction: (id: number) => request<{ ok: true }>('DELETE', `transactions/${id}`),
   changes: (businessId?: number | null) =>
-    request<{ receipts: string; cashin: string; pending: number }>('GET', `changes${businessId ? `?businessId=${businessId}` : ''}`),
+    request<{ receipts: string; cashin: string; pending: number; latestKind: RequestKind | null }>('GET', `changes${businessId ? `?businessId=${businessId}` : ''}`),
   pushKey: () => request<{ publicKey: string }>('GET', 'push/key'),
   pushSubscribe: (sub: PushSubscriptionJSON) => request<{ ok: true }>('POST', 'push/subscribe', sub),
   pushUnsubscribe: (endpoint: string) => request<{ ok: true }>('POST', 'push/unsubscribe', { endpoint }),
@@ -163,14 +169,15 @@ export const api = {
     if (q.pendingOnly) p.set('status', 'pending');
     return request<{ items: CashinRequest[]; pending: number }>('GET', `cashin?${p}`);
   },
-  addCashin: (b: { number: string; gcashName: string; amount?: string; note?: string; businessId?: number | null }) =>
+  addCashin: (b: { number: string; gcashName: string; amount?: string; note?: string; businessId?: number | null; kind?: RequestKind }) =>
     request<{ id: number }>('POST', 'cashin', b),
   cashinLookup: (number: string, businessId?: number | null) =>
     request<{ names: { name: string; at: string; source: string }[] }>(
       'GET',
       `cashin/lookup?number=${encodeURIComponent(number)}${businessId ? `&businessId=${businessId}` : ''}`,
     ),
-  updateCashin: (id: number, status: 'done' | 'cancelled') => request<{ ok: true }>('PATCH', `cashin/${id}`, { status }),
+  updateCashin: (id: number, status: 'done' | 'cancelled', txnId?: number) =>
+    request<{ ok: true }>('PATCH', `cashin/${id}`, { status, txnId }),
 
   checkRef: (ref: string, excludeId?: number, businessId?: number | null) =>
     request<{ duplicate: { refNo: string; txnDate: string; recipient: string; type: string; createdByName: string } | null }>(

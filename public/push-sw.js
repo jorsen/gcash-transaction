@@ -77,3 +77,26 @@ self.addEventListener('pushsubscriptionchange', (event) => {
     })(),
   );
 });
+
+// "Share via → GCash Tracker" (manifest share_target): keep the shared GCash receipt image and open
+// the app, which attaches it to the matching cash-in / cash-out request.
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  if (event.request.method !== 'POST' || url.origin !== self.location.origin || url.pathname !== '/share-receipt') return;
+  event.respondWith(
+    (async () => {
+      try {
+        const form = await event.request.formData();
+        const file = form.getAll('receipt').find((f) => f && typeof f !== 'string');
+        if (file) {
+          const cache = await caches.open('shared-receipts');
+          await cache.put('/shared-receipt', new Response(file, { headers: { 'Content-Type': file.type || 'image/jpeg' } }));
+          return Response.redirect('/?share=1', 303);
+        }
+      } catch (e) {
+        // fall through
+      }
+      return Response.redirect('/?share=failed', 303);
+    })(),
+  );
+});

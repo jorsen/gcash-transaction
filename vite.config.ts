@@ -30,6 +30,18 @@ export default defineConfig({
           { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
           { src: 'maskable-icon-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
+        // Lets the installed app appear in Android's "Share via" sheet (e.g. right after sending in GCash).
+        // The service worker (public/push-sw.js) receives the image and opens the attach screen.
+        share_target: {
+          action: '/share-receipt',
+          method: 'POST',
+          enctype: 'multipart/form-data',
+          params: {
+            title: 'title',
+            text: 'text',
+            files: [{ name: 'receipt', accept: ['image/*', '.png', '.jpg', '.jpeg', '.webp'] }],
+          },
+        },
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,webmanifest}'],

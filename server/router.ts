@@ -160,7 +160,7 @@ const TXN_COLUMNS = `t.id, t.type, t.amount::float8 AS amount, t.ref_no AS "refN
 const TXN_FROM = `FROM transactions t JOIN users u ON u.id = t.created_by LEFT JOIN receipt_images i ON i.txn_id = t.id`;
 
 /** Loads a transaction the user is allowed to see, or throws 404/403. */
-async function loadTxn(id: number, me: User) {
+async function loadTxn(id: number, me: User, opts: { forEdit?: boolean } = {}) {
   const rows = await query<Record<string, unknown> & { createdBy: number; businessId: number }>(
     `SELECT ${TXN_COLUMNS}, t.raw_text AS "rawText" ${TXN_FROM} WHERE t.id = $1`,
     [id],
@@ -170,7 +170,13 @@ async function loadTxn(id: number, me: User) {
   if (me.role !== 'superadmin') {
     // Other businesses' records look like they don't exist.
     if (t.businessId !== me.businessId) throw new HttpError(404, 'Transaction not found.');
-    if (me.role === 'tindera' && t.createdBy !== me.id) throw new HttpError(403, 'You can only open your own transactions.');
+    if (me.role === 'tindera' && t.createdBy !== me.id) {
+      // ...except the GCash receipt the owner attached to one of her cash-in/cash-out requests (view only).
+      const linked = opts.forEdit
+        ? []
+        : await query(`SELECT 1 FROM cashin_requests WHERE txn_id = $1 AND created_by = $2`, [id, me.id]);
+      if (!linked.length) throw new HttpError(403, 'You can only open your own transactions.');
+    }
   }
   return t;
 }
@@ -431,6 +437,13 @@ async function route(req: Request): Promise<Response> {
     return json({ id: row.id });
   }
 
+  // ---------- "Share via → GCash Tracker" fallback ----------
+  // Normally the service worker handles the shared image. If it isn't running yet (first visit),
+  // the browser posts here; send the user back to the app with a hint to try again.
+  if ((path === 'share-receipt' || url.pathname === '/share-receipt') && m === 'POST') {
+    return new Response(null, { status: 303, headers: { Location: '/?share=failed' } });
+  }
+
   // ---------- push notifications ----------
   if (path === 'push/key' && m === 'GET') {
     requireUser(user);
@@ -495,7 +508,7 @@ async function route(req: Request): Promise<Response> {
     const items = await query(
       `SELECT c.id, c.number, c.gcash_name AS "gcashName", c.amount::float8 AS amount, c.note, c.status,
               c.created_at AS "createdAt", c.handled_at AS "handledAt", c.created_by AS "createdBy",
-              cu.name AS "createdByName", hu.name AS "handledByName"
+              cu.name AS "createdByName", hu.name AS "handledByName", c.kind, c.txn_id AS "txnId"
          FROM cashin_requests c JOIN users cu ON cu.id = c.created_by LEFT JOIN users hu ON hu.id = c.handled_by
         WHERE ${where}
         ORDER BY (c.status = 'pending') DESC, c.created_at DESC LIMIT 200`,
@@ -506,12 +519,23 @@ async function route(req: Request): Promise<Response> {
 
   if (path === 'cashin' && m === 'POST') {
     const me = requireUser(user);
-    const b = await body<{ number: string; gcashName: string; amount?: number | string | null; note?: string; businessId?: number }>(req);
+    const b = await body<{
+      number: string;
+      gcashName: string;
+      amount?: number | string | null;
+      note?: string;
+      businessId?: number;
+      kind?: 'cashin' | 'cashout';
+    }>(req);
     const businessId = businessScope(me, b.businessId);
+    const kind = b.kind === 'cashout' ? 'cashout' : 'cashin';
     const number = cleanMobile(b.number);
     // Typed asterisks / OCR junk become GCash-style dots: "JU** DE*A C." -> "JU•• DE•A C."
     const gcashName = normalizeMaskedName(String(b.gcashName ?? '')).toUpperCase();
-    if (!gcashName || gcashName.length > 80) throw new HttpError(400, 'Enter the GCash name (asterisks are OK, e.g. JU** DE* C.).');
+    // Cash-in needs the receiver's GCash name to check before sending; for cash-out it's optional.
+    if ((kind === 'cashin' && !gcashName) || gcashName.length > 80) {
+      throw new HttpError(400, 'Enter the GCash name (asterisks are OK, e.g. JU** DE* C.).');
+    }
     let amount: number | null = null;
     if (b.amount !== undefined && b.amount !== null && String(b.amount).trim() !== '') {
       amount = Number(String(b.amount).replace(/,/g, ''));
@@ -520,16 +544,16 @@ async function route(req: Request): Promise<Response> {
     }
     const note = String(b.note ?? '').trim().slice(0, 500);
     const [row] = await query<{ id: number }>(
-      `INSERT INTO cashin_requests (business_id, created_by, number, gcash_name, amount, note)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-      [businessId, me.id, number, gcashName, amount, note],
+      `INSERT INTO cashin_requests (business_id, created_by, number, gcash_name, amount, note, kind)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [businessId, me.id, number, gcashName, amount, note, kind],
     );
     await notifyOwners(
       businessId,
       me.id,
       {
-        title: `Cash-in request${amount ? ` · ${peso(amount)}` : ''}`,
-        body: `${prettyNumber(number)} · ${gcashName} — from ${me.name}`,
+        title: `${kind === 'cashout' ? 'Pa-cash out po!' : 'Cash in po!'}${amount ? ` · ${peso(amount)}` : ''}`,
+        body: `${prettyNumber(number)}${gcashName ? ` · ${gcashName}` : ''} — from ${me.name}`,
         url: '/?view=cashin',
         tag: `cashin-${row.id}`,
         sticky: true,
@@ -563,25 +587,49 @@ async function route(req: Request): Promise<Response> {
   if (parts[0] === 'cashin' && parts.length === 2 && m === 'PATCH') {
     const me = requireUser(user);
     const id = Number(parts[1]);
-    const [r] = await query<{ businessId: number; createdBy: number; status: string; number: string; gcashName: string; amount: number | null }>(
+    const [r] = await query<{
+      businessId: number;
+      createdBy: number;
+      status: string;
+      number: string;
+      gcashName: string;
+      amount: number | null;
+      kind: 'cashin' | 'cashout';
+    }>(
       `SELECT business_id AS "businessId", created_by AS "createdBy", status, number, gcash_name AS "gcashName",
-              amount::float8 AS amount FROM cashin_requests WHERE id = $1`,
+              amount::float8 AS amount, kind FROM cashin_requests WHERE id = $1`,
       [id],
     );
     if (!r || (me.role !== 'superadmin' && r.businessId !== me.businessId)) throw new HttpError(404, 'Request not found.');
-    const b = await body<{ status: 'done' | 'cancelled' }>(req);
+    const b = await body<{ status: 'done' | 'cancelled'; txnId?: number }>(req);
     if (b.status !== 'done' && b.status !== 'cancelled') throw new HttpError(400, 'Invalid status.');
+    let txnId: number | null = null;
+    if (b.txnId !== undefined && b.txnId !== null) {
+      // The GCash receipt being attached must belong to the same business.
+      const [t] = await query<{ businessId: number }>(`SELECT business_id AS "businessId" FROM transactions WHERE id = $1`, [Number(b.txnId)]);
+      if (!t || t.businessId !== r.businessId) throw new HttpError(400, 'That receipt is not in this business.');
+      txnId = Number(b.txnId);
+    }
     if (me.role === 'tindera' && (r.createdBy !== me.id || b.status !== 'cancelled')) {
       throw new HttpError(403, 'Only the owner can mark a cash-in as done.');
     }
     if (r.status !== 'pending') throw new HttpError(409, `This request is already ${r.status}.`);
-    await query(`UPDATE cashin_requests SET status = $1, handled_by = $2, handled_at = NOW() WHERE id = $3`, [b.status, me.id, id]);
+    await query(
+      `UPDATE cashin_requests SET status = $1, handled_by = $2, handled_at = NOW(), txn_id = COALESCE($4, txn_id) WHERE id = $3`,
+      [b.status, me.id, id, txnId],
+    );
     if (r.createdBy !== me.id) {
+      const label = r.kind === 'cashout' ? 'Cash-out' : 'Cash-in';
       await notifyUsers(
         [r.createdBy],
         {
-          title: b.status === 'done' ? 'Cash-in sent ✓' : 'Cash-in cancelled',
-          body: `${r.amount ? `${peso(r.amount)} to ` : ''}${prettyNumber(r.number)} · ${r.gcashName}`,
+          title:
+            b.status === 'cancelled'
+              ? `${label} cancelled`
+              : r.kind === 'cashout'
+                ? `Cash-out received ✓${r.amount ? ` — give ${peso(r.amount)} cash` : ''}`
+                : `Cash-in sent ✓${txnId ? ' · receipt attached' : ''}`,
+          body: `${r.amount ? `${peso(r.amount)} · ` : ''}${prettyNumber(r.number)}${r.gcashName ? ` · ${r.gcashName}` : ''}`,
           url: '/?view=cashin',
           tag: `cashin-${id}`,
         },
@@ -598,18 +646,21 @@ async function route(req: Request): Promise<Response> {
     const me = requireUser(user);
     const businessId = businessScope(me, url.searchParams.get('businessId'));
     const own = me.role === 'tindera';
-    const [r] = await query<{ t: string | null; tc: number; c: string | null; cc: number; pending: number }>(
+    const [r] = await query<{ t: string | null; tc: number; c: string | null; cc: number; pending: number; latestKind: string | null }>(
       `SELECT (SELECT MAX(updated_at)::text FROM transactions WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS t,
               (SELECT COUNT(*)::int FROM transactions WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS tc,
               (SELECT MAX(GREATEST(created_at, COALESCE(handled_at, created_at)))::text FROM cashin_requests
                 WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS c,
               (SELECT COUNT(*)::int FROM cashin_requests WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS cc,
               (SELECT COUNT(*)::int FROM cashin_requests
-                WHERE business_id = $1 AND status = 'pending' AND ($2::int IS NULL OR created_by = $2)) AS pending`,
+                WHERE business_id = $1 AND status = 'pending' AND ($2::int IS NULL OR created_by = $2)) AS pending,
+              (SELECT kind FROM cashin_requests
+                WHERE business_id = $1 AND status = 'pending' AND ($2::int IS NULL OR created_by = $2)
+                ORDER BY created_at DESC LIMIT 1) AS "latestKind"`,
       [businessId, own ? me.id : null],
     );
     // Counts are included so deletions are noticed too.
-    return json({ receipts: `${r.t ?? ''}|${r.tc}`, cashin: `${r.c ?? ''}|${r.cc}`, pending: r.pending });
+    return json({ receipts: `${r.t ?? ''}|${r.tc}`, cashin: `${r.c ?? ''}|${r.cc}`, pending: r.pending, latestKind: r.latestKind });
   }
 
   if (path === 'check-ref' && m === 'GET') {
@@ -647,7 +698,7 @@ async function route(req: Request): Promise<Response> {
     if (parts.length === 2 && m === 'GET') return json({ txn: await loadTxn(id, me) });
 
     if (parts.length === 2 && m === 'PUT') {
-      await loadTxn(id, me);
+      await loadTxn(id, me, { forEdit: true });
       const b = await body<TxnBody>(req);
       const t = cleanTxn(b);
       await query(
