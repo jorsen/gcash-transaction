@@ -252,6 +252,15 @@ function Home({
         if (isOwner) {
           setTab('cashin');
           onOpen({ name: 'attach', file: blob });
+          // One-time tip right when they have just used the Share via sheet.
+          try {
+            if (!localStorage.getItem('share-pin-tip')) {
+              localStorage.setItem('share-pin-tip', '1');
+              setTimeout(() => ui.toast('Tip: long-press GCash Tracker in "Share via" → Pin, to keep it first', 'info'), 1200);
+            }
+          } catch {
+            // ignore
+          }
         } else {
           onOpen({ name: 'review', file: new File([blob], 'gcash-receipt.jpg', { type: blob.type || 'image/jpeg' }) });
         }
@@ -426,6 +435,34 @@ function Home({
             (or Settings → Apps → Chrome → Notifications → gcash-transaction.vercel.app). Make sure the phone isn't on silent / Do Not Disturb.
           </p>
           <p>Notifications wait up to 24 hours if the phone is off or offline.</p>
+        </div>
+      ),
+      confirmText: 'Got it',
+    });
+
+  /** How to put GCash Tracker first in GCash's "Share via" sheet (Android decides the order, so it's a phone setting). */
+  const shareSetupHelp = () =>
+    ui.info({
+      title: 'Put GCash Tracker first in "Share via"',
+      message: (
+        <div className="help-list">
+          <p>
+            <strong>1. Install the app first.</strong> In Chrome, open this site, then ⋮ → <em>Install app</em> / <em>Add to Home screen</em>.
+            Only the installed app shows up in Share via. If it's already installed but missing, remove it and install it again once.
+          </p>
+          <p>
+            <strong>2. Pin it (Samsung, Pixel and most Android 10+ phones).</strong> In GCash, after sending, tap <em>Share</em>. In the Share via
+            sheet, <em>long-press</em> GCash Tracker → <em>Pin</em>. It then always stays first.
+          </p>
+          <p>
+            <strong>Xiaomi / Redmi / POCO (HyperOS, MIUI):</strong> the Share via sheet puts the apps you share to most often first. Share to
+            GCash Tracker 2–3 times and it moves to the front. If you see a long-press <em>Pin</em> option, use it.
+          </p>
+          <p>
+            <strong>Oppo / Realme / Vivo:</strong> long-press GCash Tracker in the share list → <em>Pin</em> or <em>Move to top</em> (if
+            offered); otherwise it moves to the front after a few shares.
+          </p>
+          <p>Android doesn't let any app make itself the default share target, so this is a one-time setting on each owner's phone.</p>
         </div>
       ),
       confirmText: 'Got it',
@@ -713,6 +750,9 @@ function Home({
           onClose={() => setSheet(null)}
           actions={[
             ...(isOwner ? [{ icon: 'users' as const, label: 'Staff accounts', hint: 'Add tinderas, reset passwords', onClick: () => onOpen({ name: 'staff' }) }] : []),
+            ...(isOwner
+              ? [{ icon: 'image' as const, label: 'Share from GCash: setup', hint: 'Put GCash Tracker first in "Share via"', onClick: shareSetupHelp }]
+              : []),
             ...(isOwner
               ? [{ icon: 'download' as const, label: 'Export to Excel', hint: `CSV of ${search ? 'these search results' : monthLabel(month)}`, onClick: () => exportCsv(items, search ? 'search' : month) }]
               : []),
