@@ -483,7 +483,7 @@ async function route(req: Request): Promise<Response> {
     if (me.role === 'tindera') add('t.created_by = ?', me.id);
     else if (url.searchParams.get('userId')) add('t.created_by = ?', Number(url.searchParams.get('userId')));
     if (/^\d{4}-\d{2}$/.test(month) && !search) add('substr(t.txn_date, 1, 7) = ?', month);
-    // Type filter: "in" (money in), "out" (money out), or one receipt type, e.g. "Send Money".
+    // Type filter: "cashin" (store sent GCash), "cashout" (customer sent GCash to the store), or one receipt type.
     const type = url.searchParams.get('type') ?? '';
     if (type === 'cashin') where.push(`t.type IN ('Cash In', 'Send Money')`);
     else if (type === 'cashout') where.push(`t.type IN ('Cash Out', 'Received')`);
