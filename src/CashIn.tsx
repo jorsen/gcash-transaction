@@ -55,11 +55,27 @@ async function copyText(text: string) {
   }
 }
 
+const isAndroid = () => /android/i.test(navigator.userAgent);
 const isPhone = () => /android|iphone|ipad|ipod/i.test(navigator.userAgent);
 
+/** GCash's Android package (Play Store: com.globe.gcash.android). */
+const GCASH_PACKAGE = 'com.globe.gcash.android';
+
 /**
- * Opens the GCash app (its registered gcash:// link) so the owner can paste the copied number.
- * Phones only. Calls onFail if the app didn't open (page still visible after 2 s).
+ * Link that opens the GCash app's home screen.
+ * - Android: Chrome "intent:" link that launches the installed app by package, like tapping its icon
+ *   (a bare gcash:// doesn't match GCash's deep-link filter, so nothing opens). Not installed → Play Store.
+ * - iPhone: GCash's gcash:// scheme.
+ */
+export const gcashAppLink = () =>
+  isAndroid()
+    ? `intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=${GCASH_PACKAGE};S.browser_fallback_url=${encodeURIComponent(`https://play.google.com/store/apps/details?id=${GCASH_PACKAGE}`)};end`
+    : 'gcash://';
+
+/**
+ * Opens the GCash app so the owner can paste the copied number. Phones only.
+ * Must run right after the tap (browsers only let a page open another app during a user gesture),
+ * so call it before any network request. Calls onFail if the app didn't open (page still visible after 2.5 s).
  */
 function openGcashApp(onFail: () => void) {
   if (!isPhone()) return false;
@@ -73,8 +89,8 @@ function openGcashApp(onFail: () => void) {
     document.removeEventListener('visibilitychange', onHide);
     window.removeEventListener('pagehide', onHide);
     if (!left && document.visibilityState === 'visible') onFail();
-  }, 2000);
-  window.location.href = 'gcash://';
+  }, 2500);
+  window.location.href = gcashAppLink();
   return true;
 }
 
@@ -234,21 +250,19 @@ export function CashIn({
     setCopiedId(r.id);
     setTimeout(() => setCopiedId((c) => (c === r.id ? null : c)), 2500);
     const ownerSending = isManager && r.kind === 'cashin';
-    // Owner copying a waiting cash-in = they're sending it now: move it to Processing (yellow)
-    // before switching to GCash, so the tindera sees it right away.
+    // 1) Open GCash immediately, while the tap still counts as a user gesture.
+    const opening =
+      ownerSending &&
+      openGcashApp(() => ui.toast("GCash didn't open. Tap \"Open GCash\" on the card, then paste the number.", 'info'));
+    ui.toast(opening ? `${prettyNumber(r.number)} copied · opening GCash…` : `${prettyNumber(r.number)} copied. Paste it in GCash.`);
+    // 2) Mark it Processing (yellow) in the background. keepalive lets it finish even though we just
+    //    switched to GCash, so the tindera still sees it right away.
     if (ownerSending && r.status === 'pending') {
-      try {
-        markLocalAction();
-        await Promise.race([api.updateCashin(r.id, 'processing'), new Promise((res) => setTimeout(res, 3000))]);
-        load();
-      } catch (err) {
-        ui.toast(err instanceof Error ? err.message : String(err), 'error');
-      }
-    }
-    if (ownerSending && openGcashApp(() => ui.toast("Couldn't open GCash. Open it and paste the number.", 'info'))) {
-      ui.toast(`${prettyNumber(r.number)} copied · opening GCash…`);
-    } else {
-      ui.toast(`${prettyNumber(r.number)} copied. Paste it in GCash.`);
+      markLocalAction();
+      api
+        .updateCashin(r.id, 'processing', undefined, { keepalive: true })
+        .then(() => load())
+        .catch((err) => ui.toast(err instanceof Error ? err.message : String(err), 'error'));
     }
   };
 
@@ -350,6 +364,11 @@ export function CashIn({
           </div>
           {isManager && r.kind === 'cashin' && r.status === 'pending' && (
             <span className="hint">Copies the number{isPhone() ? ' and opens GCash' : ''}. Paste it in GCash and send. The card turns yellow (Processing).</span>
+          )}
+          {isManager && r.kind === 'cashin' && r.status === 'processing' && isPhone() && (
+            <a className="pill-btn open-gcash" href={gcashAppLink()}>
+              <Icon name="install" size={16} /> Open GCash
+            </a>
           )}
           {isManager && r.kind === 'cashin' && r.status === 'processing' && (
             <span className="hint processing-hint">Sent it in GCash? Tap Process and upload the GCash receipt. It turns green (Sent).</span>

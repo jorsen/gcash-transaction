@@ -109,12 +109,14 @@ export const setUnauthorizedHandler = (fn: () => void) => {
   onUnauthorized = fn;
 };
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, opts: { keepalive?: boolean } = {}): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`/api/${path}`, {
       method,
       credentials: 'same-origin',
+      // keepalive: finish the request even if the user switches to another app right away (e.g. GCash).
+      keepalive: opts.keepalive,
       headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -183,8 +185,8 @@ export const api = {
       `cashin/lookup?number=${encodeURIComponent(number)}${businessId ? `&businessId=${businessId}` : ''}`,
     ),
   remindCashin: (id: number) => request<{ ok: true; remindCount: number }>('POST', `cashin/${id}/remind`),
-  updateCashin: (id: number, status: 'processing' | 'done' | 'cancelled', txnId?: number) =>
-    request<{ ok: true }>('PATCH', `cashin/${id}`, { status, txnId }),
+  updateCashin: (id: number, status: 'processing' | 'done' | 'cancelled', txnId?: number, opts: { keepalive?: boolean } = {}) =>
+    request<{ ok: true }>('PATCH', `cashin/${id}`, { status, txnId }, opts),
 
   checkRef: (ref: string, excludeId?: number, businessId?: number | null) =>
     request<{ duplicate: { refNo: string; txnDate: string; recipient: string; type: string; createdByName: string } | null }>(
