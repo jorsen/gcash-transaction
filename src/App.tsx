@@ -30,13 +30,10 @@ const TYPE_FILTERS: [string, string][] = [
   ['', 'All'],
   ['in', 'Cash-In'],
   ['out', 'Cash-Out'],
-  ['Send Money', 'Send Money'],
-  ['Received', 'Received'],
   ['Payment', 'Payment'],
   ['Bank Transfer', 'Bank Transfer'],
   ['Cash In', 'Cash In'],
   ['Cash Out', 'Cash Out'],
-  ['Buy Load', 'Buy Load'],
   ['Other', 'Other'],
 ];
 
