@@ -1016,6 +1016,8 @@ async function route(req: Request): Promise<Response> {
       latestKind: r.latestKind,
       // "<time>|<kind>" of the newest reminder, so an open owner app can say "Pa cash in po!" again.
       lastRemind: r.lastRemind,
+      // Which version of the app the server is running (Vercel commit). An older app reloads itself.
+      version: (process.env.VERCEL_GIT_COMMIT_SHA ?? '').slice(0, 7),
     });
   }
 

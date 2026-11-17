@@ -5,6 +5,10 @@ import { apiDevPlugin } from './dev/apiDevPlugin';
 
 export default defineConfig({
   base: '/',
+  define: {
+    // Version of this build (Vercel commit), compared with the server's so old cached apps reload.
+    __APP_VERSION__: JSON.stringify((process.env.VERCEL_GIT_COMMIT_SHA ?? 'dev').slice(0, 7)),
+  },
   server: {
     host: true, // reachable from a phone on the same Wi-Fi during development
   },

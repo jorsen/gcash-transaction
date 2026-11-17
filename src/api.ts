@@ -214,7 +214,7 @@ export const api = {
   updateTransaction: (id: number, b: TxnPayload) => request<{ ok: true }>('PUT', `transactions/${id}`, b),
   deleteTransaction: (id: number) => request<{ ok: true }>('DELETE', `transactions/${id}`),
   changes: (businessId?: number | null) =>
-    request<{ receipts: string; cashin: string; pending: number; latestKind: RequestKind | null; lastRemind: string | null }>('GET', `changes${businessId ? `?businessId=${businessId}` : ''}`),
+    request<{ receipts: string; cashin: string; pending: number; latestKind: RequestKind | null; lastRemind: string | null; version?: string }>('GET', `changes${businessId ? `?businessId=${businessId}` : ''}`),
   activity: (q: { businessId?: number | null; category?: ActivityCategory | null; before?: number; userId?: number }) => {
     const p = new URLSearchParams();
     if (q.businessId) p.set('businessId', String(q.businessId));

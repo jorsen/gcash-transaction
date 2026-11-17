@@ -266,13 +266,19 @@ export function parseGcashPasses(texts: string[]): ParsedReceipt {
   return p;
 }
 
-/** Amount most readings agree on, and how many readings gave it (to judge if the scan is trustworthy). */
-export function voteAmount(texts: string[]): { amount: number | null; votes: number } {
+/**
+ * Amount most readings agree on, how many readings gave it, and how many gave a DIFFERENT amount.
+ * A reading that found no amount doesn't count against it; a reading that found another one does.
+ */
+export function voteAmount(texts: string[]): { amount: number | null; votes: number; conflicts: number } {
   const amount = pickAmount(texts);
-  if (amount === null) return { amount: null, votes: 0 };
-  const votes = texts.filter((t) => parseAmount(t.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) === amount).length;
-  return { amount, votes };
+  if (amount === null) return { amount: null, votes: 0, conflicts: 0 };
+  const read = texts.map((t) => parseAmount(t.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)));
+  return { amount, votes: read.filter((a) => a === amount).length, conflicts: read.filter((a) => a !== null && a !== amount).length };
 }
+
+/** How many of the values equal v. */
+export const countOf = (values: string[], v: string) => values.filter((x) => x === v).length;
 
 /** The value most readings agree on ('' if none). Ties go to the earlier reading. */
 export function majority(values: string[]): string {

@@ -17,6 +17,30 @@ export interface LiveStamp {
 const POLL_MS = 5000;
 
 /**
+ * This phone is running an older version than the server (cached by the service worker, and Android
+ * rarely restarts the app). Drop the cached copy and reload once, so it gets the latest version.
+ */
+async function updateApp(version: string) {
+  const key = 'reloaded-for-version';
+  try {
+    if (sessionStorage.getItem(key) === version) return; // already tried for this version
+    sessionStorage.setItem(key, version);
+  } catch {
+    return;
+  }
+  try {
+    const regs = (await navigator.serviceWorker?.getRegistrations()) ?? [];
+    await Promise.all(regs.map((r) => r.unregister()));
+    const names = await caches.keys();
+    // Keep a receipt that was shared into the app but not attached yet.
+    await Promise.all(names.filter((n) => n !== 'shared-receipts').map((n) => caches.delete(n)));
+  } catch {
+    // reload anyway
+  }
+  location.reload();
+}
+
+/**
  * Realtime updates for one business.
  * - Instantly: when a push notification arrives, the service worker tells the open app to check now.
  * - Otherwise: a tiny check every 5 s while the app is on screen (paused in the background).
@@ -37,6 +61,7 @@ export function useLiveStamp(businessId: number | null): LiveStamp | null {
         inFlight = true;
         try {
           const s = await api.changes(businessId);
+          if (s.version && __APP_VERSION__ !== 'dev' && s.version !== __APP_VERSION__) updateApp(s.version);
           setStamp((prev) =>
             prev && prev.receipts === s.receipts && prev.cashin === s.cashin && prev.pending === s.pending && prev.latestKind === s.latestKind && prev.lastRemind === s.lastRemind ? prev : s,
           );

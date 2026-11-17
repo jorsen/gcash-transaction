@@ -6,7 +6,7 @@ import { CropSheet } from './CropSheet';
 import { compressForStorage, isScreenshot, type CropBox } from './image';
 import { recognizePasses } from './ocr';
 import { looksLikeBankTransfer, parseBankTransfer } from './parseBank';
-import { majority, parseGcashReceipt, voteAmount } from './parseGcash';
+import { countOf, majority, parseGcashReceipt, voteAmount } from './parseGcash';
 import { peso, prettyDate } from './format';
 import { markLocalAction } from './sound';
 import { Icon, SkeletonRows, useUi } from './ui';
@@ -109,8 +109,11 @@ interface Scanned {
   source: 'gcash' | 'bank';
   channel: string;
   amount: number | null;
-  /** How many of the readings gave this amount. */
+  /** How many of the readings gave this amount, and how many read a different amount. */
   votes: number;
+  conflicts: number;
+  /** At least 2 readings agree on the date (so a misread digit can't block a fresh receipt). */
+  dateSure: boolean;
   refNo: string;
   /** Sender's name (bank receipts). */
   name: string;
@@ -123,9 +126,9 @@ interface Scanned {
 /** Why a scanned receipt can't be sent yet ('' = OK). */
 function scanProblem(s: Scanned): string {
   if (s.amount === null) return "Couldn't read the amount. Scan again: hold the phone straight, fill the screen with the receipt, avoid glare.";
-  if (s.votes < 2) return "The amount wasn't clear (it read differently each time). Scan again with a sharper photo.";
+  if (s.conflicts > 0 && s.votes < 2) return "The amount wasn't clear (it read differently each time). Scan again with a sharper photo.";
   if (s.source === 'bank' && !s.bankName) return "Couldn't read the bank. Scan again so the sender's bank is visible.";
-  if (s.txnDate) {
+  if (s.txnDate && s.dateSure) {
     const at = new Date(s.txnDate.replace(' ', 'T')).getTime();
     if (Number.isFinite(at) && Date.now() - at > 36 * 3600_000) {
       return `This receipt is from ${prettyDate(s.txnDate)}, not today. Ask the customer for their new receipt.`;
@@ -235,34 +238,40 @@ export function CashIn({
     try {
       const texts = await recognizePasses(file, (p) => setScanMsg(p), { crop, enhance: true, multiPass: true, plainPass: true });
       const text = texts.join('\n');
-      const { amount, votes } = voteAmount(texts);
+      const { amount, votes, conflicts } = voteAmount(texts);
       let s: Scanned;
       if (looksLikeBankTransfer(text)) {
         const per = texts.map(parseBankTransfer);
         const all = parseBankTransfer(text);
+        const txnDate = majority(per.map((p) => p.txnDate));
         s = {
           source: 'bank',
           channel: all.channel || 'Bank transfer',
           amount,
           votes,
+          conflicts,
+          dateSure: countOf(per.map((p) => p.txnDate), txnDate) >= 2,
           refNo: majority(per.map((p) => p.refNo)) || all.refNo,
           name: (majority(per.map((p) => p.from.name)) || all.from.name).toUpperCase(),
           bankName: majority(per.map((p) => p.from.bank)) || all.from.bank,
           last4: majority(per.map((p) => p.from.last4)) || all.from.last4,
-          txnDate: majority(per.map((p) => p.txnDate)) || all.txnDate,
+          txnDate: txnDate || all.txnDate,
         };
       } else {
         const per = texts.map(parseGcashReceipt);
+        const txnDate = majority(per.map((p) => p.txnDate));
         s = {
           source: 'gcash',
           channel: 'GCash',
           amount,
           votes,
+          conflicts,
+          dateSure: countOf(per.map((p) => p.txnDate), txnDate) >= 2,
           refNo: majority(per.map((p) => p.refNo)),
           name: '',
           bankName: '',
           last4: '',
-          txnDate: majority(per.map((p) => p.txnDate)),
+          txnDate,
         };
       }
       setScanned(s);

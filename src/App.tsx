@@ -826,7 +826,7 @@ function Home({
       )}
       {sheet === 'account' && (
         <ActionSheet
-          title={isSuper ? biz.name : `${user.name} · ${roleLabel}`}
+          title={`${isSuper ? biz.name : `${user.name} · ${roleLabel}`} · v${__APP_VERSION__}`}
           onClose={() => setSheet(null)}
           actions={[
             ...(isOwner ? [{ icon: 'users' as const, label: 'Staff accounts', hint: 'Add tinderas, reset passwords', onClick: () => onOpen({ name: 'staff' }) }] : []),
