@@ -684,7 +684,7 @@ async function route(req: Request): Promise<Response> {
       businessId,
       me.id,
       {
-        title: `${kind === 'cashout' ? 'Pa-cash out po!' : 'Cash in po!'}${amount ? ` · ${peso(amount)}` : ''}`,
+        title: `${kind === 'cashout' ? 'Ate, pa cash-out po!' : 'Ate, pa cash-in po!'}${amount ? ` · ${peso(amount)}` : ''}`,
         body: `${source === 'bank' ? 'InstaPay/bank · ' : ''}${who} — from ${me.name}`,
         url: '/?view=cashin',
         tag: `cashin-${row.id}`,
@@ -751,7 +751,7 @@ async function route(req: Request): Promise<Response> {
       targetType: 'cashin',
       targetId: id,
     });
-    const shout = r.kind === 'cashout' ? 'Pa-cash out po!' : 'Pa-cash in po!';
+    const shout = r.kind === 'cashout' ? 'Ate, pa cash-out po!' : 'Ate, pa cash-in po!';
     await notifyOwners(
       r.businessId,
       me.id,

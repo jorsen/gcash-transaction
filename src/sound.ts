@@ -163,6 +163,6 @@ export function announceRequest(kind: 'cashin' | 'cashout', force = false, remin
   lastAnnounced = Date.now();
   if (!force && !soundEnabled()) return;
   playChime('cashin', force);
-  const phrase = kind === 'cashout' ? 'Pa cash out po!' : reminder ? 'Pa cash in po!' : 'Cash in po!';
+  const phrase = kind === 'cashout' ? 'Ate, pa cash out po!' : 'Ate, pa cash in po!';
   setTimeout(() => say(reminder ? `${phrase} ${phrase}` : phrase, force), 650);
 }

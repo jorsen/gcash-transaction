@@ -351,7 +351,7 @@ function Home({
       const d = e.data;
       if (d?.type !== 'push-received' || (d.event !== 'request' && d.event !== 'remind')) return;
       announceRequest(d.kind === 'cashout' ? 'cashout' : 'cashin', false, d.event === 'remind');
-      ui.toast(d.event === 'remind' ? (d.kind === 'cashout' ? 'Pa-cash out po! (reminder)' : 'Pa-cash in po! (reminder)') : d.kind === 'cashout' ? 'Pa-cash out po!' : 'Cash in po!', 'info');
+      ui.toast(d.event === 'remind' ? (d.kind === 'cashout' ? 'Ate, pa cash-out po! (reminder)' : 'Ate, pa cash-in po! (reminder)') : d.kind === 'cashout' ? 'Ate, pa cash-out po!' : 'Ate, pa cash-in po!', 'info');
     };
     navigator.serviceWorker?.addEventListener('message', onMsg);
     return () => navigator.serviceWorker?.removeEventListener('message', onMsg);
@@ -370,7 +370,7 @@ function Home({
         // Chime + "Cash in po!" / "Pa-cash out po!" (unless the push already rang for it)
         announceRequest(live.latestKind ?? 'cashin');
         const n = live.pending - lastPending.current;
-        ui.toast(n > 1 ? `${n} new requests` : live.latestKind === 'cashout' ? 'Pa-cash out po!' : 'Cash in po!', 'info');
+        ui.toast(n > 1 ? `${n} new requests` : live.latestKind === 'cashout' ? 'Ate, pa cash-out po!' : 'Ate, pa cash-in po!', 'info');
       } else if (!isOwner && live.pending < lastPending.current) {
         playChime('done');
         ui.toast('The owner handled your cash-in request', 'info');
@@ -384,7 +384,7 @@ function Home({
     if (isOwner && lastRemind.current !== undefined && live.lastRemind && live.lastRemind !== lastRemind.current && !recentlyAnnounced()) {
       const kind = live.lastRemind.endsWith('|cashout') ? 'cashout' : 'cashin';
       announceRequest(kind, false, true);
-      ui.toast(kind === 'cashout' ? 'Pa-cash out po! (reminder)' : 'Pa-cash in po! (reminder)', 'info');
+      ui.toast(kind === 'cashout' ? 'Ate, pa cash-out po! (reminder)' : 'Ate, pa cash-in po! (reminder)', 'info');
     }
     lastRemind.current = live.lastRemind;
     lastReceipts.current = live.receipts;
@@ -784,7 +784,7 @@ function Home({
             {
               icon: 'bell' as const,
               label: soundOn ? 'Sounds: On' : 'Sounds: Off',
-              hint: soundOn ? 'Chime + "Cash in po!" for new requests while the app is open' : 'Tap to turn sounds back on',
+              hint: soundOn ? 'Chime + "Ate, pa cash-in po!" for new requests while the app is open' : 'Tap to turn sounds back on',
               onClick: toggleSound,
             },
             ...(!isSuper ? [{ icon: 'bell' as const, label: 'Notification help', hint: 'If notifications don’t arrive when the app is closed', onClick: notificationHelp }] : []),
