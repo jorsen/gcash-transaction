@@ -232,8 +232,9 @@ function Home({
   const isSuper = user.role === 'superadmin';
   const isOwner = user.role !== 'tindera'; // owner or super admin: sees and manages the whole business
   // Only the owner saves receipts; a tindera's + starts a cash-in / cash-out request instead.
-  const canCapture = isOwner && !isSuper;
-  const canRequest = !isSuper;
+  // Receipts are saved only by processing a tindera's request, so there is no "Add receipt" button.
+  // A tindera's + starts a cash-in / cash-out request.
+  const canRequest = user.role === 'tindera';
   const scopeId = isSuper ? biz.id : null;
   const [month, setMonth] = useState(thisMonth);
   const [search, setSearch] = useState('');
@@ -553,7 +554,7 @@ function Home({
     }
   };
 
-  const canInstall = canRequest &&!isStandalone() && (installEvt !== null || isIos());
+  const canInstall = !isSuper && !isStandalone() && (installEvt !== null || isIos());
   const tinderas = staff.filter((s) => s.role === 'tindera');
   const roleLabel = isSuper ? 'Super admin view' : user.role === 'owner' ? 'Owner' : 'Tindera';
 
@@ -711,14 +712,7 @@ function Home({
                     Show all types
                   </button>
                 )}
-                {!search && !typeFilter && canCapture && (
-                  <>
-                    <p>Tap the blue + button to scan a GCash receipt or pick a screenshot.</p>
-                    <button className="btn primary" onClick={() => setSheet('scan')}>
-                      <Icon name="plus" size={20} /> Add receipt
-                    </button>
-                  </>
-                )}
+                {!search && !typeFilter && isOwner && !isSuper && <p>Receipts are saved here when you process a tindera's cash-in or cash-out request.</p>}
               </div>
             ) : (
               groups.map((g) => (
@@ -769,11 +763,7 @@ function Home({
           <Icon name="receipt" />
           <span>Receipts</span>
         </button>
-        {canCapture ? (
-          <button className="fab" aria-label="Add receipt" onClick={() => setSheet('scan')}>
-            <Icon name="plus" size={30} />
-          </button>
-        ) : canRequest ? (
+        {canRequest ? (
           <button
             className="fab"
             aria-label="New cash-in / cash-out request"
