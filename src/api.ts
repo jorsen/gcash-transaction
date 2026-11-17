@@ -178,8 +178,9 @@ export const api = {
     request<{ ok: true }>('PATCH', `users/${id}`, b),
   deleteUser: (id: number) => request<{ ok: true }>('DELETE', `users/${id}`),
 
-  transactions: (q: { month?: string; search?: string; userId?: number | null; businessId?: number | null }) => {
+  transactions: (q: { month?: string; search?: string; userId?: number | null; businessId?: number | null; type?: string }) => {
     const p = new URLSearchParams();
+    if (q.type) p.set('type', q.type);
     if (q.businessId) p.set('businessId', String(q.businessId));
     if (q.month) p.set('month', q.month);
     if (q.search) p.set('search', q.search);

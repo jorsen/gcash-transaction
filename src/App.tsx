@@ -25,6 +25,21 @@ type View =
   | { name: 'activity' };
 type Open = (v: View) => void;
 
+/** Receipt type filter chips: [value sent to the server, label]. */
+const TYPE_FILTERS: [string, string][] = [
+  ['', 'All'],
+  ['in', 'Money in'],
+  ['out', 'Money out'],
+  ['Send Money', 'Send Money'],
+  ['Received', 'Received'],
+  ['Payment', 'Payment'],
+  ['Bank Transfer', 'Bank Transfer'],
+  ['Cash In', 'Cash In'],
+  ['Cash Out', 'Cash Out'],
+  ['Buy Load', 'Buy Load'],
+  ['Other', 'Other'],
+];
+
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
 }
@@ -228,6 +243,8 @@ function Home({
   const [month, setMonth] = useState(thisMonth);
   const [search, setSearch] = useState('');
   const [staffFilter, setStaffFilter] = useState<number | null>(null);
+  /** '' = all, 'in' / 'out' = money in / out, or one receipt type. */
+  const [typeFilter, setTypeFilter] = useState('');
   const [staff, setStaff] = useState<StaffUser[]>([]);
   const [items, setItems] = useState<Txn[]>([]);
   const [summary, setSummary] = useState<Summary>({ count: 0, inflow: 0, outflow: 0 });
@@ -322,7 +339,7 @@ function Home({
       if (!silent) setLoading(true);
       setError('');
       try {
-        const r = await api.transactions({ month, search: search.trim(), userId: staffFilter, businessId: scopeId });
+        const r = await api.transactions({ month, search: search.trim(), userId: staffFilter, businessId: scopeId, type: typeFilter });
         setItems(r.items);
         setSummary(r.summary);
       } catch (e) {
@@ -331,7 +348,7 @@ function Home({
         setLoading(false);
       }
     },
-    [month, search, staffFilter, scopeId],
+    [month, search, staffFilter, scopeId, typeFilter],
   );
 
   // Debounce so typing in the search box doesn't fire a request per keystroke.
@@ -654,6 +671,14 @@ function Home({
               </div>
             )}
 
+            <div className="chips scroll type-filter" role="group" aria-label="Filter by type">
+              {TYPE_FILTERS.map(([value, label]) => (
+                <button key={value || 'all'} className={`chip ${typeFilter === value ? 'active' : ''}`} onClick={() => setTypeFilter(value)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
             <label className="search-wrap">
               <Icon name="search" size={20} />
               <input
@@ -679,8 +704,19 @@ function Home({
                 <span className="empty-icon">
                   <Icon name="receipt" size={40} />
                 </span>
-                <strong>{search ? 'No matches' : `No receipts in ${monthLabel(month)}`}</strong>
-                {!search && canCapture && (
+                <strong>
+                  {search
+                    ? 'No matches'
+                    : typeFilter
+                      ? `No ${TYPE_FILTERS.find(([v]) => v === typeFilter)?.[1] ?? ''} receipts in ${monthLabel(month)}`
+                      : `No receipts in ${monthLabel(month)}`}
+                </strong>
+                {typeFilter && (
+                  <button className="btn secondary" onClick={() => setTypeFilter('')}>
+                    Show all types
+                  </button>
+                )}
+                {!search && !typeFilter && canCapture && (
                   <>
                     <p>Tap the blue + button to scan a GCash receipt or pick a screenshot.</p>
                     <button className="btn primary" onClick={() => setSheet('scan')}>
