@@ -738,7 +738,7 @@ function Home({
                           <span className="row-main">
                             {t.recipient ? <MaskedName name={t.recipient} className="row-title" /> : <span className="row-title">{t.type}</span>}
                             <span className="row-sub">
-                              {t.type} · {timeLabel(t.txnDate)}
+                              <span className={`type-tag ${t.type === 'Cash In' ? 'cashin' : isIncoming(t.type) ? 'cashout' : ''}`}>{t.type}</span> · {timeLabel(t.txnDate)}
                               {t.refNo ? ` · Ref ${t.refNo}` : ''}
                             </span>
                             {isOwner && <span className="row-by">by {t.requestedByName || t.createdByName}</span>}

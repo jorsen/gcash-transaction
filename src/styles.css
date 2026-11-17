@@ -511,3 +511,8 @@ button.activity-row:active { transform: scale(0.99); }
 .camera-video { max-width: 100%; max-height: calc(100dvh - 190px); border-radius: 12px; background: #000; }
 .camera-stage .spinner { position: absolute; }
 .camera-error { max-width: 340px; text-align: center; line-height: 1.5; color: rgba(255, 255, 255, 0.85); }
+
+/* Receipt type in the list: Cash In blue, Cash Out / Received green (same as the request cards). */
+.type-tag { font-weight: 700; }
+.type-tag.cashin { color: var(--blue); }
+.type-tag.cashout { color: var(--green); }
