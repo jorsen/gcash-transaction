@@ -166,6 +166,8 @@ const SCHEMA = [
   )`,
   // v9: deleted staff. Kept (their past receipts/requests still show their name) but hidden and unable to log in.
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
+  // v10: "Send Money" receipts are the store's cash-ins (owner sends GCash to the customer).
+  `UPDATE transactions SET type = 'Cash In' WHERE type = 'Send Money'`,
 ];
 
 /** Creates tables on first use (idempotent), so there is no separate migration step. */

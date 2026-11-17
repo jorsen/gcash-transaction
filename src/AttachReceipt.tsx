@@ -109,7 +109,7 @@ export function AttachReceipt({
       markLocalAction();
       const small = await compressForStorage(file).catch(() => file);
       const type: TxnType =
-        parsed && parsed.type !== 'Other' ? parsed.type : req?.kind === 'cashout' ? 'Received' : 'Send Money';
+        parsed && parsed.type !== 'Other' ? parsed.type : req?.kind === 'cashout' ? 'Received' : 'Cash In';
       const { id: txnId } = await api.addTransaction({
         type,
         amount,

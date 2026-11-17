@@ -7,7 +7,6 @@
  */
 
 export type TxnType =
-  | 'Send Money'
   | 'Received'
   | 'Payment'
   | 'Bank Transfer'
@@ -17,7 +16,6 @@ export type TxnType =
   | 'Other';
 
 export const TXN_TYPES: TxnType[] = [
-  'Send Money',
   'Received',
   'Payment',
   'Bank Transfer',
@@ -162,7 +160,7 @@ function parseType(text: string): TxnType {
   if (/buy\s+load|load\s+purchase|airtime/.test(t)) return 'Buy Load';
   if (/bank\s+transfer|instapay|pesonet|transfer\s+to\s+bank/.test(t)) return 'Bank Transfer';
   if (/received|you\s+have\s+received|money\s+received/.test(t)) return 'Received';
-  if (/sent\s+via\s+gcash|express\s+send|send\s+money|successfully\s+sent|amount\s+sent/.test(t)) return 'Send Money';
+  if (/sent\s+via\s+gcash|express\s+send|send\s+money|successfully\s+sent|amount\s+sent/.test(t)) return 'Cash In'; // store sent GCash to a customer = cash-in
   if (/paid|payment|pay\s+bills|biller|merchant|scan\s+to\s+pay|qr\s*ph/.test(t)) return 'Payment';
   return 'Other';
 }

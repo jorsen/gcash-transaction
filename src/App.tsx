@@ -28,8 +28,8 @@ type Open = (v: View) => void;
 /** Receipt type filter chips: [value sent to the server, label]. */
 const TYPE_FILTERS: [string, string][] = [
   ['', 'All'],
-  ['in', 'Cash-In'],
-  ['out', 'Cash-Out'],
+  ['cashin', 'Cash-In'],
+  ['cashout', 'Cash-Out'],
   ['Payment', 'Payment'],
   ['Bank Transfer', 'Bank Transfer'],
   ['Other', 'Other'],
@@ -634,11 +634,11 @@ function Home({
               </div>
               <div className="summary-grid">
                 <div>
-                  <div className="summary-sub">Cash-Out</div>
+                  <div className="summary-sub">Cash-In</div>
                   <div className="summary-value">{peso(summary.outflow)}</div>
                 </div>
                 <div>
-                  <div className="summary-sub">Cash-In</div>
+                  <div className="summary-sub">Cash-Out</div>
                   <div className="summary-value">{peso(summary.inflow)}</div>
                 </div>
               </div>

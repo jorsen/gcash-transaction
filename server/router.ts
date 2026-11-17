@@ -485,8 +485,8 @@ async function route(req: Request): Promise<Response> {
     if (/^\d{4}-\d{2}$/.test(month) && !search) add('substr(t.txn_date, 1, 7) = ?', month);
     // Type filter: "in" (money in), "out" (money out), or one receipt type, e.g. "Send Money".
     const type = url.searchParams.get('type') ?? '';
-    if (type === 'in') where.push(`t.type IN ('Received', 'Cash In')`);
-    else if (type === 'out') where.push(`t.type NOT IN ('Received', 'Cash In')`);
+    if (type === 'cashin') where.push(`t.type IN ('Cash In', 'Send Money')`);
+    else if (type === 'cashout') where.push(`t.type IN ('Cash Out', 'Received')`);
     else if (type) add('t.type = ?', type.slice(0, 40));
     if (search) {
       params.push(`%${search}%`);
@@ -500,8 +500,8 @@ async function route(req: Request): Promise<Response> {
     );
     const [summary] = await query(
       `SELECT COUNT(*)::int AS count,
-              COALESCE(SUM(CASE WHEN t.type IN ('Received', 'Cash In') THEN 0 ELSE t.amount END), 0)::float8 AS outflow,
-              COALESCE(SUM(CASE WHEN t.type IN ('Received', 'Cash In') THEN t.amount ELSE 0 END), 0)::float8 AS inflow
+              COALESCE(SUM(CASE WHEN t.type IN ('Received', 'Cash Out') THEN 0 ELSE t.amount END), 0)::float8 AS outflow,
+              COALESCE(SUM(CASE WHEN t.type IN ('Received', 'Cash Out') THEN t.amount ELSE 0 END), 0)::float8 AS inflow
          FROM transactions t JOIN users u ON u.id = t.created_by ${whereSql}`,
       params,
     );

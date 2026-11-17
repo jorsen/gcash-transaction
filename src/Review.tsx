@@ -23,7 +23,7 @@ const toInput = (s: string) => s.replace(' ', 'T');
 const fromInput = (s: string) => s.replace('T', ' ').slice(0, 16); // drop seconds if the browser adds them
 
 const emptyForm = (): Form => ({
-  type: 'Send Money',
+  type: 'Cash In',
   amount: '',
   refNo: '',
   txnDate: formatDateTime(new Date()),
