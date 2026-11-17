@@ -55,6 +55,29 @@ async function copyText(text: string) {
   }
 }
 
+const isPhone = () => /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+
+/**
+ * Opens the GCash app (its registered gcash:// link) so the owner can paste the copied number.
+ * Phones only. Calls onFail if the app didn't open (page still visible after 2 s).
+ */
+function openGcashApp(onFail: () => void) {
+  if (!isPhone()) return false;
+  let left = false;
+  const onHide = () => {
+    if (document.visibilityState === 'hidden') left = true;
+  };
+  document.addEventListener('visibilitychange', onHide);
+  window.addEventListener('pagehide', onHide);
+  setTimeout(() => {
+    document.removeEventListener('visibilitychange', onHide);
+    window.removeEventListener('pagehide', onHide);
+    if (!left && document.visibilityState === 'visible') onFail();
+  }, 2000);
+  window.location.href = 'gcash://';
+  return true;
+}
+
 /** Shows a GCash-style masked name with the hidden letters (• or *) dimmed, so the visible letters stand out. */
 export function MaskedName({ name, className = 'masked-name' }: { name: string; className?: string }) {
   return (
@@ -195,16 +218,20 @@ export function CashIn({
     }
     setCopiedId(r.id);
     setTimeout(() => setCopiedId((c) => (c === r.id ? null : c)), 2500);
-    // Owner copying a waiting cash-in = they're sending it now: move it to Processing (yellow).
-    if (isManager && r.kind === 'cashin' && r.status === 'pending') {
-      ui.toast(`${prettyNumber(r.number)} copied · Processing. Paste it in GCash.`);
+    const ownerSending = isManager && r.kind === 'cashin';
+    // Owner copying a waiting cash-in = they're sending it now: move it to Processing (yellow)
+    // before switching to GCash, so the tindera sees it right away.
+    if (ownerSending && r.status === 'pending') {
       try {
         markLocalAction();
-        await api.updateCashin(r.id, 'processing');
-        await load();
+        await Promise.race([api.updateCashin(r.id, 'processing'), new Promise((res) => setTimeout(res, 3000))]);
+        load();
       } catch (err) {
         ui.toast(err instanceof Error ? err.message : String(err), 'error');
       }
+    }
+    if (ownerSending && openGcashApp(() => ui.toast("Couldn't open GCash. Open it and paste the number.", 'info'))) {
+      ui.toast(`${prettyNumber(r.number)} copied · opening GCash…`);
     } else {
       ui.toast(`${prettyNumber(r.number)} copied. Paste it in GCash.`);
     }
@@ -277,7 +304,7 @@ export function CashIn({
             {/* Owner, cash-in, processing: yellow Process (upload receipt -> Sent) + copy again */}
             {isManager && r.kind === 'cashin' && r.status === 'processing' ? (
               <>
-                <button className="btn secondary copy-again" onClick={() => copy(r)} aria-label="Copy number again">
+                <button className="btn secondary copy-again" onClick={() => copy(r)} aria-label={isPhone() ? 'Copy number and open GCash again' : 'Copy number again'}>
                   <Icon name={copiedId === r.id ? 'check' : 'copy'} size={18} />
                 </button>
                 <button className="btn process-btn" onClick={() => processReceipt(r)} disabled={busyId === r.id}>
@@ -287,7 +314,7 @@ export function CashIn({
             ) : (
               <button className={`btn primary copy-btn ${copiedId === r.id ? 'copied' : ''}`} onClick={() => copy(r)}>
                 <Icon name={copiedId === r.id ? 'check' : 'copy'} size={18} />
-                {copiedId === r.id ? 'Copied' : 'Copy number'}
+                {copiedId === r.id ? 'Copied' : isManager && r.kind === 'cashin' && isPhone() ? 'Copy & open GCash' : 'Copy number'}
               </button>
             )}
             {isManager && r.kind === 'cashout' && (
@@ -302,7 +329,7 @@ export function CashIn({
             )}
           </div>
           {isManager && r.kind === 'cashin' && r.status === 'pending' && (
-            <span className="hint">Copy the number and send it in GCash. It turns yellow (Processing).</span>
+            <span className="hint">Copies the number{isPhone() ? ' and opens GCash' : ''}. Paste it in GCash and send. The card turns yellow (Processing).</span>
           )}
           {isManager && r.kind === 'cashin' && r.status === 'processing' && (
             <span className="hint processing-hint">Sent it in GCash? Tap Process and upload the GCash receipt. It turns green (Sent).</span>
