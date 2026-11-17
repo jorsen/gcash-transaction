@@ -136,6 +136,21 @@ export function CashIn({
   const [sending, setSending] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [remindCooldown, setRemindCooldown] = useState<Record<number, boolean>>({});
+
+  /** Tindera: alert the owner again ("Pa cash in po!"). Can be pressed repeatedly (3 s apart). */
+  const remind = async (r: CashinRequest) => {
+    setRemindCooldown((c) => ({ ...c, [r.id]: true }));
+    setTimeout(() => setRemindCooldown((c) => ({ ...c, [r.id]: false })), 3000);
+    try {
+      markLocalAction();
+      const { remindCount } = await api.remindCashin(r.id);
+      setItems((list) => list.map((x) => (x.id === r.id ? { ...x, remindCount } : x)));
+      ui.toast(`Owner reminded (${remindCount}×)`);
+    } catch (err) {
+      ui.toast(err instanceof Error ? err.message : String(err), 'error');
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -285,6 +300,11 @@ export function CashIn({
       </div>
       {r.gcashName && <MaskedName name={r.gcashName} />}
       {r.note && <div className="row-sub">{r.note}</div>}
+      {isOpen(r) && r.remindCount > 0 && (
+        <span className={`remind-badge ${isManager ? 'urgent' : ''}`}>
+          🔔 Reminded {r.remindCount}×{r.lastRemindedAt ? ` · last ${timeAgo(r.lastRemindedAt)}` : ''}
+        </span>
+      )}
       <div className="row-sub">
         {isManager ? `From ${r.createdByName} · ` : ''}
         {timeAgo(r.createdAt)}
@@ -335,6 +355,12 @@ export function CashIn({
             <span className="hint processing-hint">Sent it in GCash? Tap Process and upload the GCash receipt. It turns green (Sent).</span>
           )}
           {!isManager && r.status === 'processing' && <span className="hint processing-hint">The owner is sending it now…</span>}
+          {!isManager && r.createdBy === user.id && r.status === 'pending' && (
+            <button className="btn remind-btn" onClick={() => remind(r)} disabled={remindCooldown[r.id]}>
+              🔔 {r.kind === 'cashout' ? 'Pa cash out po!' : 'Pa cash in po!'}
+              <small>{remindCooldown[r.id] ? 'Sent to owner' : 'Tap to remind the owner'}</small>
+            </button>
+          )}
           {isManager && r.kind === 'cashout' && (
             <button className="pill-btn attach-btn" onClick={() => processReceipt(r)}>
               <Icon name="image" size={16} /> Attach GCash receipt &amp; mark {doneWord(r).toLowerCase()}

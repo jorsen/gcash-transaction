@@ -136,6 +136,9 @@ const SCHEMA = [
         CHECK (status IN ('pending', 'processing', 'done', 'cancelled'));
     END IF;
   END $$`,
+  // v6: tindera reminders ("Pa cash in po!" again) while the owner hasn't responded.
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS remind_count INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS last_reminded_at TIMESTAMPTZ`,
 ];
 
 /** Creates tables on first use (idempotent), so there is no separate migration step. */

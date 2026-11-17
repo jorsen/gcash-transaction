@@ -87,6 +87,9 @@ export interface CashinRequest {
   status: 'pending' | 'processing' | 'done' | 'cancelled';
   processingAt: string | null;
   processingByName: string | null;
+  /** Times the tindera pressed "Pa cash in po!" again. */
+  remindCount: number;
+  lastRemindedAt: string | null;
   createdAt: string;
   handledAt: string | null;
   createdBy: number;
@@ -160,7 +163,7 @@ export const api = {
   updateTransaction: (id: number, b: TxnPayload) => request<{ ok: true }>('PUT', `transactions/${id}`, b),
   deleteTransaction: (id: number) => request<{ ok: true }>('DELETE', `transactions/${id}`),
   changes: (businessId?: number | null) =>
-    request<{ receipts: string; cashin: string; pending: number; latestKind: RequestKind | null }>('GET', `changes${businessId ? `?businessId=${businessId}` : ''}`),
+    request<{ receipts: string; cashin: string; pending: number; latestKind: RequestKind | null; lastRemind: string | null }>('GET', `changes${businessId ? `?businessId=${businessId}` : ''}`),
   pushKey: () => request<{ publicKey: string }>('GET', 'push/key'),
   pushSubscribe: (sub: PushSubscriptionJSON) => request<{ ok: true }>('POST', 'push/subscribe', sub),
   pushUnsubscribe: (endpoint: string) => request<{ ok: true }>('POST', 'push/unsubscribe', { endpoint }),
@@ -179,6 +182,7 @@ export const api = {
       'GET',
       `cashin/lookup?number=${encodeURIComponent(number)}${businessId ? `&businessId=${businessId}` : ''}`,
     ),
+  remindCashin: (id: number) => request<{ ok: true; remindCount: number }>('POST', `cashin/${id}/remind`),
   updateCashin: (id: number, status: 'processing' | 'done' | 'cancelled', txnId?: number) =>
     request<{ ok: true }>('PATCH', `cashin/${id}`, { status, txnId }),
 

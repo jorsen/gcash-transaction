@@ -509,7 +509,8 @@ async function route(req: Request): Promise<Response> {
       `SELECT c.id, c.number, c.gcash_name AS "gcashName", c.amount::float8 AS amount, c.note, c.status,
               c.created_at AS "createdAt", c.handled_at AS "handledAt", c.created_by AS "createdBy",
               cu.name AS "createdByName", hu.name AS "handledByName", c.kind, c.txn_id AS "txnId",
-              c.processing_at AS "processingAt", pu.name AS "processingByName"
+              c.processing_at AS "processingAt", pu.name AS "processingByName",
+              c.remind_count AS "remindCount", c.last_reminded_at AS "lastRemindedAt"
          FROM cashin_requests c JOIN users cu ON cu.id = c.created_by LEFT JOIN users hu ON hu.id = c.handled_by
          LEFT JOIN users pu ON pu.id = c.processing_by
         WHERE ${where}
@@ -559,6 +560,8 @@ async function route(req: Request): Promise<Response> {
         url: '/?view=cashin',
         tag: `cashin-${row.id}`,
         sticky: true,
+        event: 'request',
+        kind,
       },
       url.origin,
     );
@@ -584,6 +587,51 @@ async function route(req: Request): Promise<Response> {
       [businessId, number],
     );
     return json({ names: rows });
+  }
+
+  // Tindera: "Pa cash in po!" again while the owner hasn't responded. Re-alerts every owner
+  // device (sound + vibration) and the owner's open app (chime + voice). 3 s between reminders.
+  if (parts[0] === 'cashin' && parts[2] === 'remind' && m === 'POST') {
+    const me = requireUser(user);
+    const id = Number(parts[1]);
+    const [r] = await query<{
+      businessId: number;
+      status: string;
+      kind: 'cashin' | 'cashout';
+      number: string;
+      gcashName: string;
+      amount: number | null;
+      tooSoon: boolean;
+    }>(
+      `SELECT business_id AS "businessId", status, kind, number, gcash_name AS "gcashName", amount::float8 AS amount,
+              (last_reminded_at IS NOT NULL AND last_reminded_at > NOW() - INTERVAL '3 seconds') AS "tooSoon"
+         FROM cashin_requests WHERE id = $1`,
+      [id],
+    );
+    if (!r || (me.role !== 'superadmin' && r.businessId !== me.businessId)) throw new HttpError(404, 'Request not found.');
+    if (r.status !== 'pending' && r.status !== 'processing') throw new HttpError(409, `This request is already ${r.status}.`);
+    if (r.tooSoon) throw new HttpError(429, 'Wait a moment before reminding again.');
+    const [{ remindCount }] = await query<{ remindCount: number }>(
+      `UPDATE cashin_requests SET remind_count = remind_count + 1, last_reminded_at = NOW() WHERE id = $1
+       RETURNING remind_count AS "remindCount"`,
+      [id],
+    );
+    const shout = r.kind === 'cashout' ? 'Pa-cash out po!' : 'Pa-cash in po!';
+    await notifyOwners(
+      r.businessId,
+      me.id,
+      {
+        title: `🔔 ${shout}${r.amount ? ` · ${peso(r.amount)}` : ''} (${remindCount}× reminder)`,
+        body: `${prettyNumber(r.number)}${r.gcashName ? ` · ${r.gcashName}` : ''} — ${me.name} is waiting`,
+        url: '/?view=cashin',
+        tag: `cashin-${id}`, // same tag + renotify: replaces the old alert and rings again
+        sticky: true,
+        event: 'remind',
+        kind: r.kind,
+      },
+      url.origin,
+    );
+    return json({ ok: true, remindCount });
   }
 
   if (parts[0] === 'cashin' && parts.length === 2 && m === 'PATCH') {
@@ -659,21 +707,40 @@ async function route(req: Request): Promise<Response> {
     const me = requireUser(user);
     const businessId = businessScope(me, url.searchParams.get('businessId'));
     const own = me.role === 'tindera';
-    const [r] = await query<{ t: string | null; tc: number; c: string | null; cc: number; pending: number; latestKind: string | null }>(
+    const [r] = await query<{
+      t: string | null;
+      tc: number;
+      c: string | null;
+      cc: number;
+      pending: number;
+      latestKind: string | null;
+      lastRemind: string | null;
+    }>(
       `SELECT (SELECT MAX(updated_at)::text FROM transactions WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS t,
               (SELECT COUNT(*)::int FROM transactions WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS tc,
-              (SELECT MAX(GREATEST(created_at, COALESCE(handled_at, created_at), COALESCE(processing_at, created_at)))::text FROM cashin_requests
+              (SELECT MAX(GREATEST(created_at, COALESCE(handled_at, created_at), COALESCE(processing_at, created_at), COALESCE(last_reminded_at, created_at)))::text FROM cashin_requests
                 WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS c,
               (SELECT COUNT(*)::int FROM cashin_requests WHERE business_id = $1 AND ($2::int IS NULL OR created_by = $2)) AS cc,
               (SELECT COUNT(*)::int FROM cashin_requests
                 WHERE business_id = $1 AND status IN ('pending', 'processing') AND ($2::int IS NULL OR created_by = $2)) AS pending,
               (SELECT kind FROM cashin_requests
                 WHERE business_id = $1 AND status = 'pending' AND ($2::int IS NULL OR created_by = $2)
-                ORDER BY created_at DESC LIMIT 1) AS "latestKind"`,
+                ORDER BY created_at DESC LIMIT 1) AS "latestKind",
+              (SELECT last_reminded_at::text || '|' || kind FROM cashin_requests
+                WHERE business_id = $1 AND status IN ('pending', 'processing') AND last_reminded_at IS NOT NULL
+                  AND ($2::int IS NULL OR created_by = $2)
+                ORDER BY last_reminded_at DESC LIMIT 1) AS "lastRemind"`,
       [businessId, own ? me.id : null],
     );
     // Counts are included so deletions are noticed too.
-    return json({ receipts: `${r.t ?? ''}|${r.tc}`, cashin: `${r.c ?? ''}|${r.cc}`, pending: r.pending, latestKind: r.latestKind });
+    return json({
+      receipts: `${r.t ?? ''}|${r.tc}`,
+      cashin: `${r.c ?? ''}|${r.cc}`,
+      pending: r.pending,
+      latestKind: r.latestKind,
+      // "<time>|<kind>" of the newest reminder, so an open owner app can say "Pa cash in po!" again.
+      lastRemind: r.lastRemind,
+    });
   }
 
   if (path === 'check-ref' && m === 'GET') {

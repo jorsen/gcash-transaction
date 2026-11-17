@@ -149,9 +149,20 @@ export function say(text: string, force = false) {
   }
 }
 
-/** New request alert for the owner: chime, then "Cash in po!" or "Pa-cash out po!". */
-export function announceRequest(kind: 'cashin' | 'cashout', force = false) {
+let lastAnnounced = 0;
+/** True if an alert was just played (so the same event arriving by push and by polling only rings once). */
+export function recentlyAnnounced(ms = 2500) {
+  return Date.now() - lastAnnounced < ms;
+}
+
+/**
+ * Request alert for the owner: chime, then "Cash in po!" / "Pa cash out po!".
+ * A reminder from the tindera says it twice: "Pa cash in po! Pa cash in po!"
+ */
+export function announceRequest(kind: 'cashin' | 'cashout', force = false, reminder = false) {
+  lastAnnounced = Date.now();
   if (!force && !soundEnabled()) return;
   playChime('cashin', force);
-  setTimeout(() => say(kind === 'cashout' ? 'Pa cash out po!' : 'Cash in po!', force), 650);
+  const phrase = kind === 'cashout' ? 'Pa cash out po!' : reminder ? 'Pa cash in po!' : 'Cash in po!';
+  setTimeout(() => say(reminder ? `${phrase} ${phrase}` : phrase, force), 650);
 }

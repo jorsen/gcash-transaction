@@ -11,7 +11,7 @@ self.addEventListener('push', (event) => {
     (async () => {
       const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       // Tell any open app window to refresh its lists right away (realtime + in-app chime).
-      windows.forEach((c) => c.postMessage({ type: 'push-received', tag: data.tag }));
+      windows.forEach((c) => c.postMessage({ type: 'push-received', tag: data.tag, event: data.event, kind: data.kind }));
       const isIos = /iphone|ipad|ipod/i.test(self.navigator.userAgent);
       const appInFront = windows.some((c) => c.focused && c.visibilityState === 'visible');
       if (appInFront && !isIos) return; // the open app chimes itself; avoid a double alert

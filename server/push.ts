@@ -15,6 +15,9 @@ export interface PushPayload {
   tag?: string;
   /** Keep the notification on screen until it is tapped or dismissed (e.g. cash-in requests). */
   sticky?: boolean;
+  /** Lets an open app react instantly (chime + "Cash in po!") without waiting for its next check. */
+  event?: 'request' | 'remind' | 'done';
+  kind?: 'cashin' | 'cashout';
 }
 
 let keys: Promise<{ publicKey: string; privateKey: string }> | null = null;

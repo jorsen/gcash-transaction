@@ -10,7 +10,7 @@ import { useLiveStamp } from './live';
 import { Login } from './Login';
 import { disablePush, enablePush, ensurePushSubscription, syncPushSubscription, unlinkPushSubscription, type PushState } from './push';
 import { Review } from './Review';
-import { announceRequest, playChime, recentLocalAction, setSoundEnabled, soundEnabled } from './sound';
+import { announceRequest, playChime, recentLocalAction, recentlyAnnounced, setSoundEnabled, soundEnabled } from './sound';
 import { Staff } from './Staff';
 import { ActionSheet, Avatar, Banner, Icon, SkeletonRows, useUi } from './ui';
 
@@ -314,6 +314,21 @@ function Home({
   const live = useLiveStamp(scopeId);
   const lastReceipts = useRef<string | null>(null);
   const lastPending = useRef<number | null>(null);
+  const lastRemind = useRef<string | null | undefined>(undefined);
+
+  // Instant alert: the push itself says what happened, so an open owner app rings and says
+  // "Cash in po!" the moment it arrives instead of waiting for the next check.
+  useEffect(() => {
+    if (!isOwner) return;
+    const onMsg = (e: MessageEvent) => {
+      const d = e.data;
+      if (d?.type !== 'push-received' || (d.event !== 'request' && d.event !== 'remind')) return;
+      announceRequest(d.kind === 'cashout' ? 'cashout' : 'cashin', false, d.event === 'remind');
+      ui.toast(d.event === 'remind' ? (d.kind === 'cashout' ? 'Pa-cash out po! (reminder)' : 'Pa-cash in po! (reminder)') : d.kind === 'cashout' ? 'Pa-cash out po!' : 'Cash in po!', 'info');
+    };
+    navigator.serviceWorker?.addEventListener('message', onMsg);
+    return () => navigator.serviceWorker?.removeEventListener('message', onMsg);
+  }, [isOwner, ui]);
   useEffect(() => {
     if (!live) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing from the live stamp
@@ -324,8 +339,8 @@ function Home({
 
     // Sounds for things other people did (never for your own actions).
     if (lastPending.current !== null && !recentLocalAction()) {
-      if (isOwner && live.pending > lastPending.current) {
-        // Chime + "Cash in po!" / "Pa-cash out po!"
+      if (isOwner && live.pending > lastPending.current && !recentlyAnnounced()) {
+        // Chime + "Cash in po!" / "Pa-cash out po!" (unless the push already rang for it)
         announceRequest(live.latestKind ?? 'cashin');
         const n = live.pending - lastPending.current;
         ui.toast(n > 1 ? `${n} new requests` : live.latestKind === 'cashout' ? 'Pa-cash out po!' : 'Cash in po!', 'info');
@@ -338,6 +353,13 @@ function Home({
       playChime('receipt');
       ui.toast('New receipt uploaded', 'info');
     }
+    // A tindera pressed "Pa cash in po!" again (fallback when push isn't on for this device).
+    if (isOwner && lastRemind.current !== undefined && live.lastRemind && live.lastRemind !== lastRemind.current && !recentlyAnnounced()) {
+      const kind = live.lastRemind.endsWith('|cashout') ? 'cashout' : 'cashin';
+      announceRequest(kind, false, true);
+      ui.toast(kind === 'cashout' ? 'Pa-cash out po! (reminder)' : 'Pa-cash in po! (reminder)', 'info');
+    }
+    lastRemind.current = live.lastRemind;
     lastReceipts.current = live.receipts;
     lastPending.current = live.pending;
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -10,6 +10,8 @@ export interface LiveStamp {
   pending: number;
   /** Kind of the newest waiting request ("cashin" / "cashout"). */
   latestKind: 'cashin' | 'cashout' | null;
+  /** "<time>|<kind>" of the newest reminder from a tindera. */
+  lastRemind: string | null;
 }
 
 const POLL_MS = 5000;
@@ -36,7 +38,7 @@ export function useLiveStamp(businessId: number | null): LiveStamp | null {
         try {
           const s = await api.changes(businessId);
           setStamp((prev) =>
-            prev && prev.receipts === s.receipts && prev.cashin === s.cashin && prev.pending === s.pending && prev.latestKind === s.latestKind ? prev : s,
+            prev && prev.receipts === s.receipts && prev.cashin === s.cashin && prev.pending === s.pending && prev.latestKind === s.latestKind && prev.lastRemind === s.lastRemind ? prev : s,
           );
         } catch {
           // offline or logged out: try again next tick
