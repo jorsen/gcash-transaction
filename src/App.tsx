@@ -658,7 +658,7 @@ function Home({
                 <button className={`chip ${staffFilter === null ? 'active' : ''}`} onClick={() => setStaffFilter(null)}>
                   Everyone
                 </button>
-                {staff.map((s) => (
+                {tinderas.map((s) => (
                   <button key={s.id} className={`chip ${staffFilter === s.id ? 'active' : ''}`} onClick={() => setStaffFilter(s.id)}>
                     {s.name}
                   </button>
