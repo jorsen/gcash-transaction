@@ -123,15 +123,21 @@ interface Scanned {
   txnDate: string;
 }
 
+/** Cash-out / payment receipts older than this many days (calendar days) are refused. */
+const MAX_RECEIPT_DAYS = 2;
+
 /** Why a scanned receipt can't be sent yet ('' = OK). */
 function scanProblem(s: Scanned): string {
   if (s.amount === null) return "Couldn't read the amount. Scan again: hold the phone straight, fill the screen with the receipt, avoid glare.";
   if (s.conflicts > 0 && s.votes < 2) return "The amount wasn't clear (it read differently each time). Scan again with a sharper photo.";
   if (s.source === 'bank' && !s.bankName) return "Couldn't read the bank. Scan again so the sender's bank is visible.";
   if (s.txnDate && s.dateSure) {
-    const at = new Date(s.txnDate.replace(' ', 'T')).getTime();
-    if (Number.isFinite(at) && Date.now() - at > 36 * 3600_000) {
-      return `This receipt is from ${prettyDate(s.txnDate)}, not today. Ask the customer for their new receipt.`;
+    // Receipts from today or the last MAX_RECEIPT_DAYS days (by calendar day) are accepted.
+    const day = new Date(`${s.txnDate.slice(0, 10)}T00:00`).getTime();
+    const today = new Date(new Date().toDateString()).getTime();
+    const daysOld = Math.round((today - day) / 86_400_000);
+    if (Number.isFinite(daysOld) && daysOld > MAX_RECEIPT_DAYS) {
+      return `This receipt is from ${prettyDate(s.txnDate)} (${daysOld} days ago). Only receipts from the last ${MAX_RECEIPT_DAYS} days are accepted. Ask the customer for their new receipt.`;
     }
   }
   return '';
