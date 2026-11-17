@@ -662,6 +662,8 @@ async function route(req: Request): Promise<Response> {
 
   if (path === 'cashin' && m === 'POST') {
     const me = requireUser(user);
+    // Only tinderas request cash-ins / cash-outs; the owner handles them.
+    if (me.role !== 'tindera') throw new HttpError(403, 'Only tinderas can send cash-in / cash-out requests.');
     const b = await body<{
       number: string;
       gcashName: string;
