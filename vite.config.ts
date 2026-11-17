@@ -13,6 +13,7 @@ export default defineConfig({
     apiDevPlugin(), // dev only: serves /api with an embedded Postgres
     VitePWA({
       registerType: 'autoUpdate',
+      injectRegister: false, // registered in src/main.tsx (checks for updates when the app is reopened)
       includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png'],
       manifest: {
         name: 'GCash Tracker',

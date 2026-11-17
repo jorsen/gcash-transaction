@@ -221,7 +221,7 @@ export function CashIn({
    * Read the customer's receipt photo (only the framed part). It's read 3 times; every detail is the
    * value most readings agree on, and the amount must come out the same at least twice to be trusted.
    */
-  const scanProof = async (file: Blob, crop?: CropBox) => {
+  const scanProof = async (file: Blob, crop?: CropBox): Promise<Scanned | null> => {
     setCropFile(null);
     setProof(file);
     setScanned(null);
@@ -263,11 +263,23 @@ export function CashIn({
       setScanned(s);
       setSource(s.source);
       setScanMsg('');
+      return s;
     } catch (e) {
       setScanMsg(`Couldn't read the receipt (${e instanceof Error ? e.message : String(e)}). Scan again.`);
+      return null;
     } finally {
       setScanning(false);
     }
+  };
+
+  /**
+   * New photo (camera or upload): read it right away. If the whole photo doesn't read clearly
+   * (e.g. a photo of the customer's phone with background around it), open the framing step
+   * so only the receipt is read.
+   */
+  const readImage = async (file: Blob) => {
+    const s = await scanProof(file);
+    if ((!s || scanProblem(s)) && !(await isScreenshot(file))) setCropFile(file);
   };
   const attachInput = useRef<HTMLInputElement>(null);
   const attachFor = useRef<number | null>(null);
@@ -636,9 +648,7 @@ export function CashIn({
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   e.target.value = '';
-                  if (!f) return;
-                  // Screenshot: read it whole right away. Camera photo: frame the receipt first.
-                  isScreenshot(f).then((shot) => (shot ? scanProof(f) : setCropFile(f)));
+                  if (f) readImage(f);
                 }}
               />
             </div>
@@ -823,7 +833,7 @@ export function CashIn({
           onCancel={() => setCameraOpen(false)}
           onCapture={(photo) => {
             setCameraOpen(false);
-            setCropFile(photo);
+            readImage(photo);
           }}
           onGallery={() => {
             setCameraOpen(false);
@@ -834,7 +844,7 @@ export function CashIn({
       {cropFile && (
         <CropSheet
           file={cropFile}
-          title="Frame the customer's receipt"
+          title="Frame just the receipt to read it clearly"
           onCancel={() => setCropFile(null)}
           onDone={(crop) => scanProof(cropFile, crop)}
         />
