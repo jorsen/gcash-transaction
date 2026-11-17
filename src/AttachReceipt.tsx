@@ -185,7 +185,7 @@ export function AttachReceipt({
               <Icon name="cash" size={32} />
             </span>
             <strong>No waiting requests</strong>
-            <p>You can still save this as a receipt.</p>
+            <p>There's no cash-in or cash-out request to attach this receipt to.</p>
           </div>
         ) : (
           <ul className="list">
@@ -220,13 +220,8 @@ export function AttachReceipt({
       </main>
 
       <div className="sticky-actions">
-        {requestId === undefined && (
-          <button className="btn secondary" onClick={() => save(false)} disabled={saving || reading}>
-            Receipt only
-          </button>
-        )}
         <button className="btn primary" onClick={() => save(true)} disabled={saving || reading || !chosen}>
-          {saving ? 'Saving…' : doneLabel}
+          {saving ? 'Saving…' : reading ? 'Reading receipt…' : !chosen && requests?.length ? 'Pick a request above' : doneLabel}
         </button>
       </div>
     </div>
