@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { api, blobToPayload, imageUrl, type TxnPayload, type User } from './api';
 import { BlobImage } from './BlobImage';
-import { MaskedName } from './CashIn';
 import { peso, prettyDate } from './format';
 import { markLocalAction } from './sound';
 import { Icon, useUi } from './ui';
@@ -318,13 +317,6 @@ export function Review({
             </Field>
             <Field label="Name / Merchant">
               <input className="input" placeholder="e.g. JU•• DE•A C." value={form.recipient} onChange={(e) => set('recipient', e.target.value)} />
-              {requested && (
-                <span className="requested-name">
-                  Requested{requested.by ? ` by ${requested.by}` : ''}:{' '}
-                  {requested.name ? <MaskedName name={requested.name.toUpperCase()} className="masked-name" /> : null}
-                  {requested.number ? <span className="requested-number"> · {requested.number.replace(/^(\d{4})(\d{3})(\d{4})$/, '$1 $2 $3')}</span> : null}
-                </span>
-              )}
             </Field>
             <Field label="Mobile number">
               <input className="input" type="tel" placeholder="+63 9XX XXX XXXX" value={form.phone} onChange={(e) => set('phone', e.target.value)} />

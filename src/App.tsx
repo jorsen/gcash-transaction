@@ -741,11 +741,6 @@ function Home({
                               {t.type} · {timeLabel(t.txnDate)}
                               {t.refNo ? ` · Ref ${t.refNo}` : ''}
                             </span>
-                            {t.requestedName && (
-                              <span className="row-requested">
-                                Requested: <MaskedName name={t.requestedName.toUpperCase()} className="masked-name" />
-                              </span>
-                            )}
                             {isOwner && <span className="row-by">by {t.requestedByName || t.createdByName}</span>}
                           </span>
                           <span className={`amount ${isIncoming(t.type) ? 'in' : 'out'}`}>
