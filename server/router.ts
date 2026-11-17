@@ -924,7 +924,8 @@ async function route(req: Request): Promise<Response> {
                 ? `Cash-out received ✓${r.amount ? ` — give ${peso(r.amount)} cash` : ''}`
                 : `Cash-in sent ✓${txnId ? ' · receipt attached' : ''}`,
           body: `${r.amount ? `${peso(r.amount)} · ` : ''}${prettyNumber(r.number)}${r.gcashName ? ` · ${r.gcashName}` : ''}`,
-          url: '/?view=cashin',
+          // Done with a receipt: open the GCash receipt directly, so she can show it to the customer.
+          url: b.status === 'done' && txnId ? `/?txn=${txnId}` : '/?view=cashin',
           tag: `cashin-${id}`,
         },
         url.origin,
