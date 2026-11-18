@@ -492,7 +492,8 @@ button.activity-row:active { transform: scale(0.99); }
 .scan-proof { display: flex; gap: 12px; align-items: flex-start; padding: 12px; border: 1px dashed var(--border); border-radius: 12px; background: var(--card-2); }
 .scan-proof-main { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .scan-proof .hint { display: flex; gap: 6px; align-items: center; }
-.proof-thumb { width: 56px; height: 90px; flex: none; border-radius: 8px; overflow: hidden; background: #0b1b33; }
+.proof-thumb { width: 56px; height: 90px; flex: none; border-radius: 8px; overflow: hidden; background: #0b1b33; padding: 0; border: 0; cursor: zoom-in; display: block; }
+.proof-thumb:focus-visible { outline: 2px solid var(--primary, #4f8cff); outline-offset: 2px; }
 .proof-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .small-link { align-self: flex-start; font-size: 13px; padding: 2px 0; }
 .field-row { display: flex; gap: 10px; }

@@ -224,6 +224,8 @@ export function CashIn({
   const [scanMsg, setScanMsg] = useState('');
   const [scanning, setScanning] = useState(false);
   const [proofView, setProofView] = useState<number | null>(null);
+  /** Viewing the photo just scanned (before it's sent), full screen. */
+  const [proofPreview, setProofPreview] = useState(false);
   const scanInput = useRef<HTMLInputElement>(null);
   /** Cash-out / payment: the store receives GCash. Details come only from scanning the customer's receipt. */
   const receiving = kind !== 'cashin';
@@ -688,9 +690,9 @@ export function CashIn({
           {receiving && (
             <div className="scan-proof">
               {proof && (
-                <span className="proof-thumb">
+                <button type="button" className="proof-thumb" aria-label="View the receipt photo" onClick={() => setProofPreview(true)}>
                   <BlobImage blob={proof} alt="Customer's receipt" />
-                </span>
+                </button>
               )}
               <div className="scan-proof-main">
                 <div className="scan-buttons">
@@ -936,6 +938,11 @@ export function CashIn({
       {proofView !== null && (
         <Lightbox onClose={() => setProofView(null)} label="Customer's transfer receipt">
           <img src={proofUrl(proofView)} alt="Customer's transfer receipt" />
+        </Lightbox>
+      )}
+      {proofPreview && proof && (
+        <Lightbox onClose={() => setProofPreview(false)} label="Customer's receipt">
+          <BlobImage blob={proof} alt="Customer's receipt" />
         </Lightbox>
       )}
     </>
