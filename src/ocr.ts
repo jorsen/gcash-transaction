@@ -71,13 +71,28 @@ const REF_READS: { sharpen: number; heights: number[] }[] = [
 ];
 
 /**
- * Second look at just the reference number: finds its line on the receipt, then reads only that
- * strip, sharpened and enlarged to a few sizes, digits only. Blurry photos that read as junk on the
- * whole receipt ("Ref ds 302? She 158844") often read correctly this way. Returns each reading's last-5 guess.
+ * Same idea for the date (right side of the ref line). Small sizes with stronger sharpening read the
+ * day and hour best (the month stays garbled on blurry photos; see dateFromReadings).
  */
-export async function readRefTails(file: Blob, crop: CropBox | undefined, progress?: (label: string) => void): Promise<string[]> {
+const DATE_READS: { sharpen: number; heights: number[] }[] = [
+  { sharpen: 1.2, heights: [80, 100, 130, 170] },
+  { sharpen: 2, heights: [80, 100, 130, 170] },
+];
+
+/**
+ * Second look at the reference line: finds it on the receipt, then reads only that strip, sharpened
+ * and enlarged to a few sizes. Blurry photos that read as junk on the whole receipt
+ * ("Ref ds 302? She 158844 Mice 18, 2020") often read correctly this way.
+ * Returns each reading's last-5 ref guess, and the raw readings of the date part (right side of the line).
+ */
+export async function readRefLine(
+  file: Blob,
+  crop: CropBox | undefined,
+  progress?: (label: string) => void,
+): Promise<{ tails: string[]; dates: string[] }> {
   onProgress = null;
-  progress?.('Reading reference number…');
+  progress?.('Reading reference number and date…');
+  const none = { tails: [], dates: [] };
   try {
     const [worker, canvas] = await Promise.all([getWorker(), prepareForOcr(file, { crop, enhance: true })]);
     // Find the line: as one block of text first, then as scattered text (finds lines the first misses).
@@ -89,30 +104,39 @@ export async function readRefTails(file: Blob, crop: CropBox | undefined, progre
       box = findRefLine(lines);
       if (box) break;
     }
-    if (!box) return [];
-    // The strip as a fraction of the original photo (canvas coordinates are inside `crop`).
+    if (!box) return none;
+    // Strips as fractions of the original photo (canvas coordinates are inside `crop`).
     const c = crop ?? { x: 0, y: 0, w: 1, h: 1 };
     const padY = (box.y1 - box.y0) * 0.35;
     const fx = (px: number) => c.x + (Math.max(0, Math.min(canvas.width, px)) / canvas.width) * c.w;
     const fy = (py: number) => c.y + (Math.max(0, Math.min(canvas.height, py)) / canvas.height) * c.h;
-    const x = fx(box.x0 - 6);
-    const y = fy(box.y0 - padY);
-    const strip = { x, y, w: fx(box.x1 + 6) - x, h: fy(box.y1 + padY) - y };
-    const tails: string[] = [];
-    await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: '0123456789 ' });
-    try {
-      for (const { sharpen, heights } of REF_READS) {
+    const area = (x0: number, x1: number) => {
+      const x = fx(x0);
+      const y = fy(box.y0 - padY);
+      return { x, y, w: fx(x1) - x, h: fy(box.y1 + padY) - y };
+    };
+    const refStrip = area(box.x0 - 6, box.x1 + 6);
+    // The date sits on the right half of the line; the reader may cut the line short, so go to the card's edge.
+    const dateStrip = area(box.x0 + (box.lineX1 - box.x0) * 0.5, canvas.width);
+    const read = async (strip: CropBox, reads: typeof REF_READS, whitelist: string) => {
+      const out: string[] = [];
+      await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: whitelist });
+      for (const { sharpen, heights } of reads) {
         for (const height of heights) {
-          const text = (await worker.recognize(await prepareForOcr(file, { crop: strip, enhance: true, height, sharpen }))).data.text;
-          tails.push(refTailFromDigits(text));
+          out.push((await worker.recognize(await prepareForOcr(file, { crop: strip, enhance: true, height, sharpen }))).data.text.trim());
         }
       }
+      return out;
+    };
+    try {
+      const tails = (await read(refStrip, REF_READS, '0123456789 ')).map(refTailFromDigits);
+      const dates = await read(dateStrip, DATE_READS, '0123456789 ,:.ADFJMNOPSabceglnoprtuvy');
+      return { tails, dates };
     } finally {
       await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO, tessedit_char_whitelist: '' });
     }
-    return tails;
   } catch {
-    return [];
+    return none;
   }
 }
 

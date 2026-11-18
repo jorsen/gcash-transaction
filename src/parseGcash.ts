@@ -157,7 +157,7 @@ const MONEY_ISH = /\d[.,]\d{2}\b/;
  * else the line right below "Total". When the date shares the line (GCash puts it on the right),
  * only the left part is kept so the date's digits don't mix in.
  */
-export function findRefLine(lines: OcrLine[]): OcrLine['bbox'] | null {
+export function findRefLine(lines: OcrLine[]): (OcrLine['bbox'] & { lineX1: number }) | null {
   const clean = lines.filter((l) => l.text.trim());
   const digitRun = (l: OcrLine) => /\d{5,}/.test(l.text.replace(/(\d) (\d)/g, '$1$2')) && !MONEY_ISH.test(l.text);
   // On GCash receipts the ref line comes right after the total. "Total" itself is often garbled on a
@@ -173,7 +173,49 @@ export function findRefLine(lines: OcrLine[]): OcrLine['bbox'] | null {
     (anchor < 0 ? clean.find((l) => digitRun(l) && !PHONE.test(l.text) && !/[+*]?6[38]\s?\d{3}\s?\d{3}/.test(l.text)) : undefined);
   if (!line) return null;
   const { x0, y0, x1, y1 } = line.bbox;
-  return { x0, y0, x1: DATE_ISH.test(line.text) ? x0 + (x1 - x0) * 0.62 : x1, y1 };
+  return { x0, y0, x1: DATE_ISH.test(line.text) ? x0 + (x1 - x0) * 0.62 : x1, y1, lineX1: x1 };
+}
+
+/**
+ * The receipt's date from several readings of just the date part of the ref line (blurry photos).
+ * The month and year usually come out garbled ("Mae 18, 2028 11 AM" for Nov 18, 2026 11:14 AM),
+ * but the day and hour come out right, so: a full date if 2+ readings agree on it; otherwise the day
+ * (2+ readings agree) taken as the most recent such day up to today (cash-out receipts are only a
+ * day or two old), and the hour/minutes when 2+ readings agree on them.
+ * `time`: 'full' = hour and minutes read, 'hour' = only the hour (minutes set to 00), 'none' = 00:00.
+ */
+export function dateFromReadings(texts: string[], now = new Date()): { txnDate: string; time: 'full' | 'hour' | 'none'; sure: boolean } | null {
+  const full = texts.map(parseDate).filter((d) => d && !d.endsWith('00:00'));
+  const bestFull = majority(full);
+  if (bestFull && countOf(full, bestFull) >= 2) return { txnDate: bestFull, time: 'full', sure: true };
+
+  const parts = texts.map((t) => {
+    const m = t.match(/(\d{1,2})\s*[,.]?\s+(?:2\d{3,4}|20)\b\s*(?:(\d{1,2})(?:\s*[:.]?\s*(\d{2}))?)?\s*([AP])?/i);
+    if (!m) return null;
+    return { day: m[1], hour: m[2] ?? '', min: m[3] ?? '', ap: (m[4] ?? '').toUpperCase() };
+  });
+  const ok = parts.filter((p): p is NonNullable<typeof p> => p !== null && +p.day >= 1 && +p.day <= 31);
+  const day = majority(ok.map((p) => p.day));
+  if (!day || countOf(ok.map((p) => p.day), day) < 2) return null;
+  // Most recent date with that day of the month, up to today.
+  const d = new Date(now.getFullYear(), now.getMonth(), +day);
+  if (d > now || d.getDate() !== +day) d.setMonth(d.getMonth() - 1, +day);
+  if (d.getDate() !== +day) return null; // e.g. "31" in a month without one
+
+  const hours = ok.map((p) => p.hour).filter((h) => +h >= 1 && +h <= 12);
+  const hour = majority(hours);
+  const ap = majority(ok.map((p) => p.ap).filter(Boolean));
+  let time: 'full' | 'hour' | 'none' = 'none';
+  if (hour && countOf(hours, hour) >= 2 && ap) {
+    let h = +hour % 12;
+    if (ap === 'P') h += 12;
+    const mins = ok.filter((p) => p.hour === hour && p.min && +p.min < 60).map((p) => p.min);
+    const min = majority(mins);
+    const minOk = Boolean(min) && countOf(mins, min) >= 2;
+    d.setHours(h, minOk ? +min : 0);
+    time = minOk ? 'full' : 'hour';
+  }
+  return { txnDate: formatDateTime(d), time, sure: false };
 }
 
 /** Last 5 digits from a digits-only reading of the ref line: the first run of 6+ digits (e.g. "5047 304 158844" -> "58844"). */

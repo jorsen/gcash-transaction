@@ -320,9 +320,12 @@ textarea.input { resize: vertical; min-height: 80px; }
 .sticky-actions .btn.secondary { flex: 0 0 110px; }
 .sticky-actions .btn.primary { flex: 1; }
 .raw { white-space: pre-wrap; font-size: 12px; color: var(--muted); background: var(--card); padding: 12px; border-radius: 10px; margin: 0; }
-.lightbox { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.94); display: grid; place-items: center; padding: 56px 12px 12px; overflow: auto; animation: lightbox-in 0.15s ease-out; }
-.lightbox-body { max-width: 100%; max-height: 100%; display: grid; place-items: center; }
-.lightbox-body img { display: block; max-width: 100%; max-height: calc(100dvh - 68px); width: auto; height: auto; object-fit: contain; border-radius: 6px; }
+.lightbox { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.94); display: grid; place-items: center; padding: 56px 12px 40px; overflow: hidden; animation: lightbox-in 0.15s ease-out; }
+/* touch-action none: dragging on the picture moves the magnifier instead of scrolling / zooming the page. */
+.lightbox-body { max-width: 100%; max-height: 100%; display: grid; place-items: center; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; cursor: crosshair; }
+.lightbox-body img { display: block; max-width: 100%; max-height: calc(100dvh - 96px); width: auto; height: auto; object-fit: contain; border-radius: 6px; pointer-events: none; -webkit-user-drag: none; }
+.lightbox-lens { position: fixed; z-index: 82; border-radius: 50%; border: 3px solid #fff; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6); background-color: #000; background-repeat: no-repeat; pointer-events: none; }
+.lightbox-hint { position: fixed; left: 0; right: 0; bottom: max(10px, env(safe-area-inset-bottom)); margin: 0; text-align: center; font-size: 13px; color: rgba(255, 255, 255, 0.7); }
 .lightbox-close { position: fixed; top: max(10px, env(safe-area-inset-top)); right: 10px; z-index: 81; width: 44px; height: 44px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, 0.16); color: #fff; display: grid; place-items: center; cursor: pointer; }
 .lightbox-close:hover, .lightbox-close:focus-visible { background: rgba(255, 255, 255, 0.28); }
 @keyframes lightbox-in { from { opacity: 0; } to { opacity: 1; } }

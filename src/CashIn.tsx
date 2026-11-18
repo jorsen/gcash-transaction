@@ -4,9 +4,9 @@ import { BlobImage } from './BlobImage';
 import { CameraSheet } from './CameraSheet';
 import { CropSheet } from './CropSheet';
 import { compressForStorage, findReceiptCard, isScreenshot, type CropBox } from './image';
-import { readRefTails, recognizePasses } from './ocr';
+import { readRefLine, recognizePasses } from './ocr';
 import { looksLikeBankTransfer, parseBankTransfer } from './parseBank';
-import { countOf, majority, parseGcashReceipt, parseRefTail, REF_TAIL, voteAmount } from './parseGcash';
+import { countOf, dateFromReadings, formatDateTime, majority, parseGcashReceipt, parseRefTail, REF_TAIL, voteAmount } from './parseGcash';
 import { peso, prettyDate } from './format';
 import { markLocalAction } from './sound';
 import { Icon, Lightbox, SkeletonRows, useUi } from './ui';
@@ -127,6 +127,16 @@ interface Scanned {
   sentToPhone: string;
   /** All the text read, kept with the record. */
   rawText: string;
+  /** How much of the time was read: a blurry photo may give only the hour ("around 11 AM"). */
+  dateTime?: 'full' | 'hour' | 'none';
+}
+
+/** "Nov 18, 2026 11:14 AM", or "Nov 18, 2026, around 11 AM" when only the hour could be read. */
+function receiptDateLabel(s: Scanned) {
+  const full = prettyDate(s.txnDate);
+  if (s.dateTime === 'hour') return full.replace(/ (\d+):00 ([AP]M)$/, ', around $1 $2');
+  if (s.dateTime === 'none') return full.replace(/ \d+:\d+ [AP]M$/, '');
+  return full;
 }
 
 /** Cash-out / payment receipts older than this many days (calendar days) are refused. */
@@ -259,12 +269,18 @@ export function CashIn({
       if (s?.source === 'gcash') {
         // Ref no. (last 5) is trusted only when at least 2 readings agree. If the whole-receipt readings
         // don't, read just the ref line again, enlarged, and vote over everything.
+        // Same for the date (it sits on the right of the ref line).
         const candidates = texts.map(parseRefTail).filter(Boolean);
-        if (countOf(candidates, majority(candidates)) < 2) {
-          candidates.push(...(await readRefTails(file, crops[0], setScanMsg)).filter(Boolean));
+        let dateTime: Scanned['dateTime'] = s.txnDate ? 'full' : 'none';
+        let { txnDate, dateSure } = s;
+        if (countOf(candidates, majority(candidates)) < 2 || !s.txnDate) {
+          const line = await readRefLine(file, crops[0], setScanMsg);
+          candidates.push(...line.tails.filter(Boolean));
+          const d = s.txnDate ? null : dateFromReadings(line.dates);
+          if (d) ({ txnDate, sure: dateSure, time: dateTime } = d);
         }
         const best = majority(candidates);
-        s = { ...s, refNo: countOf(candidates, best) >= 2 ? best : '' };
+        s = { ...s, refNo: countOf(candidates, best) >= 2 ? best : '', txnDate, dateSure, dateTime };
       }
       setScanned(s);
       if (s) setSource(s.source);
@@ -433,7 +449,9 @@ export function CashIn({
           refNo: scanned.refNo,
           receiptName: scanned.sentToName,
           receiptPhone: scanned.sentToPhone,
-          receiptDate: scanned.txnDate,
+          // Only the day read (no time) and it's today: let the server use "now" rather than midnight.
+          receiptDate:
+            scanned.dateTime === 'none' && scanned.txnDate.slice(0, 10) === formatDateTime(new Date()).slice(0, 10) ? '' : scanned.txnDate,
           rawText: scanned.rawText,
           proof: await blobToPayload(await compressForStorage(proof).catch(() => proof)),
         });
@@ -737,7 +755,7 @@ export function CashIn({
                 <dt>Ref no. (last 5)</dt>
                 <dd className="mono">{scanned.refNo ? `…${scanned.refNo}` : '—'}</dd>
                 <dt>Date</dt>
-                <dd>{scanned.txnDate ? prettyDate(scanned.txnDate) : '—'}</dd>
+                <dd>{scanned.txnDate ? receiptDateLabel(scanned) : '—'}</dd>
               </dl>
             </div>
           )}

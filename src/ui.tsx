@@ -1,15 +1,22 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { PasswordInput } from './PasswordInput';
 
 /* ------------------------------------------------------------------ */
 /* Lightbox: full-screen picture with an X to close                    */
 /* ------------------------------------------------------------------ */
 
+/** How much the magnifying glass enlarges. */
+const LENS_ZOOM = 2.5;
+
 /**
  * Shows a picture full screen on a dark backdrop. Closes with the X, a tap on the backdrop,
- * or Escape. Pinch-zoom works on the picture (it isn't closed by tapping the picture itself).
+ * or Escape. Magnifying glass: hold and drag on the picture (phone) or move the mouse over it
+ * (computer) to see that spot enlarged. On touch the lens sits above the finger so it isn't covered.
  */
 export function Lightbox({ onClose, children, label = 'Receipt' }: { onClose: () => void; children: ReactNode; label?: string }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [lens, setLens] = useState<{ left: number; top: number; size: number; bg: string; bgSize: string; bgPos: string } | null>(null);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -20,14 +27,73 @@ export function Lightbox({ onClose, children, label = 'Receipt' }: { onClose: ()
       document.body.style.overflow = overflow;
     };
   }, [onClose]);
+
+  /** Moves the lens to the pointer; hides it when the pointer is off the picture. */
+  const magnify = (e: ReactPointerEvent) => {
+    const img = bodyRef.current?.querySelector('img');
+    if (!img || !img.currentSrc) return;
+    const r = img.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    if (x < 0 || y < 0 || x > r.width || y > r.height) {
+      setLens(null);
+      return;
+    }
+    const size = Math.round(Math.min(200, window.innerWidth * 0.45));
+    const half = size / 2;
+    const touch = e.pointerType !== 'mouse';
+    setLens({
+      left: e.clientX - half,
+      // Above the finger on touch; centered on the cursor with a mouse.
+      top: touch ? Math.max(4, e.clientY - size - 36) : e.clientY - half,
+      size,
+      bg: `url("${img.currentSrc}")`,
+      bgSize: `${r.width * LENS_ZOOM}px ${r.height * LENS_ZOOM}px`,
+      bgPos: `${half - x * LENS_ZOOM}px ${half - y * LENS_ZOOM}px`,
+    });
+  };
+
   return (
     <div className="lightbox" role="dialog" aria-modal="true" aria-label={label} onClick={onClose}>
       <button type="button" className="lightbox-close" aria-label="Close" onClick={onClose}>
         <Icon name="close" size={26} />
       </button>
-      <div className="lightbox-body" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={bodyRef}
+        className="lightbox-body"
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId); // keep following the finger
+          magnify(e);
+        }}
+        onPointerMove={(e) => {
+          if (e.pointerType === 'mouse' || e.buttons) magnify(e);
+        }}
+        onPointerUp={(e) => e.pointerType !== 'mouse' && setLens(null)}
+        onPointerCancel={() => setLens(null)}
+        onContextMenu={(e) => e.preventDefault()} // long-press opens the lens, not the "save image" menu
+        onPointerLeave={() => setLens(null)}
+      >
         {children}
       </div>
+      {lens && (
+        <div
+          className="lightbox-lens"
+          aria-hidden="true"
+          style={{
+            left: lens.left,
+            top: lens.top,
+            width: lens.size,
+            height: lens.size,
+            backgroundImage: lens.bg,
+            backgroundSize: lens.bgSize,
+            backgroundPosition: lens.bgPos,
+          }}
+        />
+      )}
+      <p className="lightbox-hint" onClick={(e) => e.stopPropagation()}>
+        Hold and drag on the picture to magnify
+      </p>
     </div>
   );
 }
