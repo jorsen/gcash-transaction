@@ -278,7 +278,7 @@ export function CashIn({
         if (countOf(candidates, majority(candidates)) < 2 || !s.txnDate) {
           const line = await readRefLine(file, crops[0], setScanMsg);
           candidates.push(...line.tails.filter(Boolean));
-          const d = s.txnDate ? null : dateFromReadings(line.dates);
+          const d = s.txnDate ? null : dateFromReadings(line.dates, line.times);
           if (d) ({ txnDate, sure: dateSure, time: dateTime } = d);
         }
         const best = majority(candidates);
@@ -756,7 +756,7 @@ export function CashIn({
                 )}
                 <dt>Ref no. (last 5)</dt>
                 <dd className="mono">{scanned.refNo ? `…${scanned.refNo}` : '—'}</dd>
-                <dt>Date</dt>
+                <dt>Date &amp; time</dt>
                 <dd>{scanned.txnDate ? receiptDateLabel(scanned) : '—'}</dd>
               </dl>
             </div>

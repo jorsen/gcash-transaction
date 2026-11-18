@@ -79,20 +79,27 @@ const DATE_READS: { sharpen: number; heights: number[] }[] = [
   { sharpen: 2, heights: [80, 100, 130, 170] },
 ];
 
+/** The time alone (right end of the date), digits + AM/PM only. Tuned in Chrome on a blurry photo. */
+const TIME_READS: { sharpen: number; heights: number[] }[] = [
+  { sharpen: 0.7, heights: [60, 80, 100, 130, 170] },
+  { sharpen: 2, heights: [60, 80, 100, 130, 170] },
+];
+
 /**
  * Second look at the reference line: finds it on the receipt, then reads only that strip, sharpened
  * and enlarged to a few sizes. Blurry photos that read as junk on the whole receipt
  * ("Ref ds 302? She 158844 Mice 18, 2020") often read correctly this way.
- * Returns each reading's last-5 ref guess, and the raw readings of the date part (right side of the line).
+ * Returns each reading's last-5 ref guess, and the raw readings of the date part (right side of the
+ * line) and of just the time (right end of the date).
  */
 export async function readRefLine(
   file: Blob,
   crop: CropBox | undefined,
   progress?: (label: string) => void,
-): Promise<{ tails: string[]; dates: string[] }> {
+): Promise<{ tails: string[]; dates: string[]; times: string[] }> {
   onProgress = null;
   progress?.('Reading reference number and date…');
-  const none = { tails: [], dates: [] };
+  const none = { tails: [], dates: [], times: [] };
   try {
     const [worker, canvas] = await Promise.all([getWorker(), prepareForOcr(file, { crop, enhance: true })]);
     // Find the line: as one block of text first, then as scattered text (finds lines the first misses).
@@ -131,7 +138,10 @@ export async function readRefLine(
     try {
       const tails = (await read(refStrip, REF_READS, '0123456789 ')).map(refTailFromDigits);
       const dates = await read(dateStrip, DATE_READS, '0123456789 ,:.ADFJMNOPSabceglnoprtuvy');
-      return { tails, dates };
+      // The time on its own (right end of the date): the minutes read far more often this way.
+      const timeStrip = { ...dateStrip, x: dateStrip.x + dateStrip.w * 0.45, w: dateStrip.w * 0.55 };
+      const times = await read(timeStrip, TIME_READS, '0123456789:AMP ');
+      return { tails, dates, times };
     } finally {
       await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO, tessedit_char_whitelist: '' });
     }

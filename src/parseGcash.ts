@@ -184,7 +184,11 @@ export function findRefLine(lines: OcrLine[]): (OcrLine['bbox'] & { lineX1: numb
  * day or two old), and the hour/minutes when 2+ readings agree on them.
  * `time`: 'full' = hour and minutes read, 'hour' = only the hour (minutes set to 00), 'none' = 00:00.
  */
-export function dateFromReadings(texts: string[], now = new Date()): { txnDate: string; time: 'full' | 'hour' | 'none'; sure: boolean } | null {
+export function dateFromReadings(
+  texts: string[],
+  timeTexts: string[] = [],
+  now = new Date(),
+): { txnDate: string; time: 'full' | 'hour' | 'none'; sure: boolean } | null {
   const full = texts.map(parseDate).filter((d) => d && !d.endsWith('00:00'));
   const bestFull = majority(full);
   if (bestFull && countOf(full, bestFull) >= 2) return { txnDate: bestFull, time: 'full', sure: true };
@@ -209,7 +213,17 @@ export function dateFromReadings(texts: string[], now = new Date()): { txnDate: 
   if (hour && countOf(hours, hour) >= 2 && ap) {
     let h = +hour % 12;
     if (ap === 'P') h += 12;
-    const mins = ok.filter((p) => p.hour === hour && p.min && +p.min < 60).map((p) => p.min);
+    // Minutes: the 2 digits right before AM/PM. On a blurry photo the "11:" of "11:14 AM" often drops
+    // out ("2028 14 AM"), so the hour comes from the date readings. If that number is the only one after
+    // the year and equals the hour ("2020 11 AM"), it's the hour with the minutes missing, not minutes.
+    const minuteOf = (t: string) => {
+      const m = t.match(/(?:^|\s)(\d{2})\s*[AP]/i);
+      if (!m || +m[1] > 59) return '';
+      const afterYear = t.replace(/^.*?(?:2\d{3,4}|20)\b/, '').match(/\d+/g) ?? [];
+      if (+m[1] === +hour && afterYear.length <= 1) return '';
+      return m[1];
+    };
+    const mins = [...texts, ...timeTexts].map(minuteOf).filter(Boolean);
     const min = majority(mins);
     const minOk = Boolean(min) && countOf(mins, min) >= 2;
     d.setHours(h, minOk ? +min : 0);
