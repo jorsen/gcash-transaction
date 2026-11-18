@@ -449,14 +449,31 @@ function Home({
     }
   };
 
-  const notificationHelp = () =>
-    ui.info({
-      title: 'Getting notifications when the app is closed',
+  const notificationHelp = async () => {
+    const test = await ui.confirm({
+      title: 'Getting notifications on time',
       message: (
         <div className="help-list">
           <p>
-            <strong>Android (Chrome):</strong> Settings → Apps → Chrome → Battery → <em>Unrestricted</em> (Xiaomi: <em>No restrictions</em>;
-            Oppo/Realme/Vivo: allow <em>background activity</em> and <em>auto-launch</em>). Also make sure Chrome notifications are allowed.
+            Late notifications (minutes late, or only when you unlock the phone) are caused by the phone's <strong>battery saver</strong>{' '}
+            holding back Chrome. Set Chrome to never be restricted:
+          </p>
+          <p>
+            <strong>Android (Chrome):</strong> Settings → Apps → Chrome → Battery → <em>Unrestricted</em>.
+            <br />
+            <strong>Xiaomi / Redmi / POCO:</strong> Settings → Apps → Chrome → Battery saver → <em>No restrictions</em>, and turn on{' '}
+            <em>Autostart</em>.
+            <br />
+            <strong>Oppo / Realme / Vivo:</strong> Settings → Battery → (App battery management) → Chrome → allow <em>background activity</em>,{' '}
+            <em>auto-launch</em> and turn off <em>optimize</em>.
+            <br />
+            <strong>Samsung:</strong> Settings → Battery → Background usage limits → remove Chrome from <em>Sleeping / Deep sleeping apps</em>.
+            <br />
+            Also allow Chrome notifications, and keep the phone off Do Not Disturb.
+          </p>
+          <p>
+            A waiting cash-in / cash-out / payment request also <strong>rings again every 2 minutes</strong> (up to 20 minutes) until you open
+            it, so a missed alert gets another chance.
           </p>
           <p>
             <strong>iPhone:</strong> open GCash Tracker from its Home Screen icon (not Safari). Settings → Notifications → GCash Tracker →
@@ -474,8 +491,11 @@ function Home({
           <p>Notifications wait up to 24 hours if the phone is off or offline.</p>
         </div>
       ),
-      confirmText: 'Got it',
+      confirmText: 'Send a test',
+      cancelText: 'Close',
     });
+    if (test) testNotification();
+  };
 
   /** How to put GCash Tracker first in GCash's "Share via" sheet (Android decides the order, so it's a phone setting). */
   const shareSetupHelp = () =>
@@ -607,6 +627,11 @@ function Home({
         {pushState === 'off' && (
           <Banner id="push" icon="bell" action={{ label: 'Turn on', onClick: togglePush, busy: pushBusy }}>
             Get notified {isOwner ? 'about new receipts & cash-ins' : 'when your cash-ins are sent'}
+          </Banner>
+        )}
+        {pushState === 'on' && isOwner && !isSuper && (
+          <Banner id="notif-on-time-v1" icon="bell" action={{ label: 'Set up', onClick: notificationHelp }}>
+            Make sure cash-in alerts arrive on time (phone battery setting)
           </Banner>
         )}
         {canInstall && (

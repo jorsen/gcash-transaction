@@ -173,6 +173,9 @@ const SCHEMA = [
   `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS receipt_phone TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS receipt_date TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS raw_text TEXT NOT NULL DEFAULT ''`,
+  // v12: automatic repeat notifications while a request waits (see autoRealert in router.ts).
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS auto_alerts INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE cashin_requests ADD COLUMN IF NOT EXISTS last_alert_at TIMESTAMPTZ`,
 ];
 
 /** Creates tables on first use (idempotent), so there is no separate migration step. */

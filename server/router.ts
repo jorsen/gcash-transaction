@@ -78,6 +78,63 @@ function describeRequest(r: { source?: string; number: string; gcashName: string
   return [r.number ? prettyNumber(r.number) : '', r.gcashName].filter(Boolean).join(' · ');
 }
 
+/** Repeat alerts: every REALERT_MINUTES while a request waits untouched, at most REALERT_MAX times. */
+const REALERT_MINUTES = 2;
+const REALERT_MAX = 10;
+
+/**
+ * Re-sends the owner's notification for requests still waiting (not yet opened as "processing") after
+ * REALERT_MINUTES without any alert, up to REALERT_MAX times (~20 min). A phone that held back the first
+ * push (battery saver) or an owner who missed the sound gets another ring. Runs on the open apps' 5-second
+ * check, so no scheduler is needed. The UPDATE … RETURNING claims each alert atomically: two apps checking
+ * at the same moment can't send it twice.
+ */
+async function autoRealert(businessId: number, origin: string) {
+  try {
+    const due = await query<{
+      id: number;
+      kind: Kind;
+      amount: number | null;
+      number: string;
+      gcashName: string;
+      source: string;
+      bankName: string;
+      accountLast4: string;
+      createdBy: number;
+      createdByName: string;
+      minutes: number;
+    }>(
+      `UPDATE cashin_requests c SET auto_alerts = auto_alerts + 1, last_alert_at = NOW()
+        WHERE business_id = $1 AND status = 'pending' AND auto_alerts < $2
+          AND GREATEST(created_at, COALESCE(last_reminded_at, created_at), COALESCE(last_alert_at, created_at))
+              < NOW() - make_interval(mins => $3)
+       RETURNING id, kind, amount::float8 AS amount, number, gcash_name AS "gcashName", source, bank_name AS "bankName",
+                 account_last4 AS "accountLast4", created_by AS "createdBy",
+                 (SELECT name FROM users u WHERE u.id = c.created_by) AS "createdByName",
+                 FLOOR(EXTRACT(EPOCH FROM NOW() - created_at) / 60)::int AS minutes`,
+      [businessId, REALERT_MAX, REALERT_MINUTES],
+    );
+    for (const r of due) {
+      await notifyOwners(
+        businessId,
+        r.createdBy,
+        {
+          title: `🔔 ${KINDS[r.kind].shout}${r.amount ? ` · ${peso(r.amount)}` : ''} (waiting ${r.minutes} min)`,
+          body: `${describeRequest(r) || KINDS[r.kind].Label} — ${r.createdByName} is waiting`,
+          url: '/?view=cashin',
+          tag: `cashin-${r.id}`, // replaces the earlier alert and rings again
+          sticky: true,
+          event: 'remind',
+          kind: r.kind,
+        },
+        origin,
+      );
+    }
+  } catch (e) {
+    console.error('autoRealert failed', e);
+  }
+}
+
 /** Current Philippine time as "YYYY-MM-DD HH:mm" (server runs in UTC). */
 const phNow = () => new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 16).replace('T', ' ');
 
@@ -1008,6 +1065,8 @@ async function route(req: Request): Promise<Response> {
     const me = requireUser(user);
     const businessId = businessScope(me, url.searchParams.get('businessId'));
     const own = me.role === 'tindera';
+    // Any open app of the business (usually the tindera, waiting) drives the repeat alerts.
+    if (businessId) await autoRealert(businessId, url.origin);
     const [r] = await query<{
       t: string | null;
       tc: number;
