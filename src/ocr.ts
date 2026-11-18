@@ -1,5 +1,6 @@
 import { createWorker, PSM, type Worker } from 'tesseract.js';
 import { prepareForOcr, type CropBox } from './image';
+import { findRefLine, refTailFromDigits, type OcrLine } from './parseGcash';
 
 let workerPromise: Promise<Worker> | null = null;
 let onProgress: ((label: string) => void) | null = null;
@@ -57,6 +58,50 @@ export interface OcrOptions {
 
 export async function recognizeText(file: Blob, progress?: (label: string) => void, opts: OcrOptions = {}): Promise<string> {
   return (await recognizePasses(file, progress, opts)).join('\n');
+}
+
+/**
+ * Second look at just the reference number: finds its line on the receipt, then reads only that
+ * strip, enlarged to a few sizes, digits only. Blurry photos that read as junk on the whole receipt
+ * ("Ref ds 302? She 158844") often read correctly this way. Returns the last-5 guess of each size.
+ */
+export async function readRefTails(file: Blob, crop: CropBox | undefined, progress?: (label: string) => void): Promise<string[]> {
+  onProgress = null;
+  progress?.('Reading reference number…');
+  try {
+    const [worker, canvas] = await Promise.all([getWorker(), prepareForOcr(file, { crop, enhance: true })]);
+    // Find the line: as one block of text first, then as scattered text (finds lines the first misses).
+    let box: ReturnType<typeof findRefLine> = null;
+    for (const psm of [PSM.SINGLE_BLOCK, PSM.SPARSE_TEXT]) {
+      await worker.setParameters({ tessedit_pageseg_mode: psm });
+      const { data } = await worker.recognize(canvas, {}, { blocks: true });
+      const lines: OcrLine[] = (data.blocks ?? []).flatMap((b) => b.paragraphs.flatMap((p) => p.lines));
+      box = findRefLine(lines);
+      if (box) break;
+    }
+    if (!box) return [];
+    // The strip as a fraction of the original photo (canvas coordinates are inside `crop`).
+    const c = crop ?? { x: 0, y: 0, w: 1, h: 1 };
+    const padY = (box.y1 - box.y0) * 0.35;
+    const fx = (px: number) => c.x + (Math.max(0, Math.min(canvas.width, px)) / canvas.width) * c.w;
+    const fy = (py: number) => c.y + (Math.max(0, Math.min(canvas.height, py)) / canvas.height) * c.h;
+    const x = fx(box.x0 - 6);
+    const y = fy(box.y0 - padY);
+    const strip = { x, y, w: fx(box.x1 + 6) - x, h: fy(box.y1 + padY) - y };
+    const tails: string[] = [];
+    await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: '0123456789 ' });
+    try {
+      for (const height of [130, 170, 260]) {
+        const text = (await worker.recognize(await prepareForOcr(file, { crop: strip, enhance: true, height }))).data.text;
+        tails.push(refTailFromDigits(text));
+      }
+    } finally {
+      await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO, tessedit_char_whitelist: '' });
+    }
+    return tails;
+  } catch {
+    return [];
+  }
 }
 
 /** Like recognizeText, but returns each reading separately (so their results can be compared). */

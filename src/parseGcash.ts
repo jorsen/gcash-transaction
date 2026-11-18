@@ -143,6 +143,41 @@ export function parseRefTail(text: string): string {
   return group ? group[0].slice(-REF_TAIL) : '';
 }
 
+export interface OcrLine {
+  text: string;
+  bbox: { x0: number; y0: number; x1: number; y1: number };
+}
+
+const DATE_ISH = /20\d\d|\b[ap]m\b|\d:\d\d/i;
+const MONEY_ISH = /\d[.,]\d{2}\b/;
+
+/**
+ * Which part of the picture holds the reference number, from the lines the reader found:
+ * the "Ref No." line, else a line with a long run of digits (not money / a mobile number),
+ * else the line right below "Total". When the date shares the line (GCash puts it on the right),
+ * only the left part is kept so the date's digits don't mix in.
+ */
+export function findRefLine(lines: OcrLine[]): OcrLine['bbox'] | null {
+  const clean = lines.filter((l) => l.text.trim());
+  const isPhone = (t: string) => PHONE.test(t) || /[+*]?6[38]\s?\d{3}\s?\d{3}/.test(t);
+  let line =
+    clean.find((l) => /\bref\b|ref\s*n|reference/i.test(l.text) && /\d{3}/.test(l.text)) ??
+    clean.find((l) => /\d{5,}/.test(l.text.replace(/(\d) (\d)/g, '$1$2')) && !MONEY_ISH.test(l.text) && !isPhone(l.text));
+  if (!line) {
+    const total = clean.findIndex((l) => /total/i.test(l.text));
+    if (total >= 0) line = clean[total + 1];
+  }
+  if (!line) return null;
+  const { x0, y0, x1, y1 } = line.bbox;
+  return { x0, y0, x1: DATE_ISH.test(line.text) ? x0 + (x1 - x0) * 0.62 : x1, y1 };
+}
+
+/** Last 5 digits from a digits-only reading of the ref line: the first run of 6+ digits (e.g. "5047 304 158844" -> "58844"). */
+export function refTailFromDigits(text: string): string {
+  const run = text.split(/\D+/).find((r) => r.length >= 6);
+  return run ? run.slice(-REF_TAIL) : '';
+}
+
 function parseDate(text: string): string {
   // "Nov 17, 2026 5:36 PM" / "Nov 17, 2026, 05:36 PM" / "November 17 2026 5:36PM"
   const m = text.match(

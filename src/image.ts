@@ -133,7 +133,7 @@ export async function findReceiptCard(file: Blob): Promise<CropBox | null> {
  * - crop: keep just the receipt (photos of a phone screen have lots of background that confuses OCR)
  * - enhance: grayscale + contrast stretch, which helps a lot with glare / beige screens / cracks
  */
-export async function prepareForOcr(file: Blob, opts: { crop?: CropBox; enhance?: boolean } = {}): Promise<HTMLCanvasElement> {
+export async function prepareForOcr(file: Blob, opts: { crop?: CropBox; enhance?: boolean; height?: number } = {}): Promise<HTMLCanvasElement> {
   const full = await drawScaled(file, 2200);
   let canvas = full;
   if (!opts.crop && full.width < 1100) {
@@ -152,8 +152,8 @@ export async function prepareForOcr(file: Blob, opts: { crop?: CropBox; enhance?
     const sy = Math.round(y * full.height);
     const sw = Math.max(1, Math.round(w * full.width));
     const sh = Math.max(1, Math.round(h * full.height));
-    // Enlarge small crops so text is ~1200 px wide (OCR likes bigger letters).
-    const scale = Math.min(3, Math.max(1, 1200 / sw));
+    // Enlarge small crops so text is ~1200 px wide (OCR likes bigger letters), or to exactly `height` px tall.
+    const scale = opts.height ? Math.min(10, opts.height / sh) : Math.min(3, Math.max(1, 1200 / sw));
     canvas = document.createElement('canvas');
     canvas.width = Math.round(sw * scale);
     canvas.height = Math.round(sh * scale);

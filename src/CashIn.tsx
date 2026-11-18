@@ -4,7 +4,7 @@ import { BlobImage } from './BlobImage';
 import { CameraSheet } from './CameraSheet';
 import { CropSheet } from './CropSheet';
 import { compressForStorage, findReceiptCard, isScreenshot, type CropBox } from './image';
-import { recognizePasses } from './ocr';
+import { readRefTails, recognizePasses } from './ocr';
 import { looksLikeBankTransfer, parseBankTransfer } from './parseBank';
 import { countOf, majority, parseGcashReceipt, parseRefTail, REF_TAIL, voteAmount } from './parseGcash';
 import { peso, prettyDate } from './format';
@@ -255,6 +255,16 @@ export function CashIn({
         texts.push(...(await recognizePasses(file, (p) => setScanMsg(p), { crop, enhance: true, multiPass: true, plainPass: true })));
         s = scannedFrom(texts);
         if (!scanProblem(s) && s.refNo && s.txnDate) break;
+      }
+      if (s?.source === 'gcash') {
+        // Ref no. (last 5) is trusted only when at least 2 readings agree. If the whole-receipt readings
+        // don't, read just the ref line again, enlarged, and vote over everything.
+        const candidates = texts.map(parseRefTail).filter(Boolean);
+        if (countOf(candidates, majority(candidates)) < 2) {
+          candidates.push(...(await readRefTails(file, crops[0], setScanMsg)).filter(Boolean));
+        }
+        const best = majority(candidates);
+        s = { ...s, refNo: countOf(candidates, best) >= 2 ? best : '' };
       }
       setScanned(s);
       if (s) setSource(s.source);
