@@ -182,14 +182,24 @@ function sharpenGray(canvas: HTMLCanvasElement, amount: number, radius: number) 
   const d = img.data;
   const g = new Float32Array(w * h);
   for (let i = 0; i < w * h; i++) g[i] = d[i * 4];
-  // Box blur, horizontal then vertical (running sums: fast at any radius).
+  const blur = boxBlur(g, w, h, radius);
+  for (let i = 0; i < w * h; i++) {
+    const v = Math.max(0, Math.min(255, g[i] + amount * (g[i] - blur[i])));
+    d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+/** Box blur of a w×h channel, horizontal then vertical (running sums: fast at any radius). */
+function boxBlur(g: Float32Array, w: number, h: number, radius: number): Float32Array {
   const tmp = new Float32Array(w * h);
   const blur = new Float32Array(w * h);
+  const n = 2 * radius + 1;
   for (let y = 0; y < h; y++) {
     let sum = 0;
     for (let x = -radius; x <= radius; x++) sum += g[y * w + Math.min(w - 1, Math.max(0, x))];
     for (let x = 0; x < w; x++) {
-      tmp[y * w + x] = sum / (2 * radius + 1);
+      tmp[y * w + x] = sum / n;
       sum += g[y * w + Math.min(w - 1, x + radius + 1)] - g[y * w + Math.max(0, x - radius)];
     }
   }
@@ -197,15 +207,46 @@ function sharpenGray(canvas: HTMLCanvasElement, amount: number, radius: number) 
     let sum = 0;
     for (let y = -radius; y <= radius; y++) sum += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
     for (let y = 0; y < h; y++) {
-      blur[y * w + x] = sum / (2 * radius + 1);
+      blur[y * w + x] = sum / n;
       sum += tmp[Math.min(h - 1, y + radius + 1) * w + x] - tmp[Math.max(0, y - radius) * w + x];
     }
   }
+  return blur;
+}
+
+/**
+ * A clearer copy of a photo for people to look at (lightbox "Enhance", download), like a document scan:
+ * 1. Flatten the lighting: each pixel's brightness is divided by its surroundings' brightness, so the
+ *    receipt's paper becomes white everywhere (no dim corners / glare / tint) and text stays dark.
+ * 2. Darken the text (gamma 2.2) so faint, blurry letters turn solid.
+ * 3. Gentle sharpening of letter edges.
+ * Black and white: GCash's blue text keeps light centers when colors are kept (letters look hollow).
+ * Settings picked by comparing them on real blurry customer photos. Returns a JPEG.
+ */
+export async function enhanceForViewing(file: Blob): Promise<Blob> {
+  const canvas = await drawScaled(file, 2400);
+  const ctx = canvas.getContext('2d')!;
+  const { width: w, height: h } = canvas;
+  const img = ctx.getImageData(0, 0, w, h);
+  const d = img.data;
+  const lum = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) lum[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+  const scale = Math.max(w, h) / 1600; // blur and letter size grow with the photo's size
+  // Surrounding brightness: a wide blur, done twice (smoother, no box artifacts).
+  const bgR = Math.max(8, Math.round(scale * 24));
+  const bg = boxBlur(boxBlur(lum, w, h, bgR), w, h, bgR);
+  const flat = new Float32Array(w * h);
   for (let i = 0; i < w * h; i++) {
-    const v = Math.max(0, Math.min(255, g[i] + amount * (g[i] - blur[i])));
+    const ratio = Math.min(1, lum[i] / Math.max(24, bg[i] * 0.97));
+    flat[i] = 255 * ratio ** 2.2;
+  }
+  const blur = boxBlur(flat, w, h, Math.max(1, Math.round(scale * 5)));
+  for (let i = 0; i < w * h; i++) {
+    const v = Math.max(0, Math.min(255, flat[i] + 0.5 * (flat[i] - blur[i])));
     d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
   }
   ctx.putImageData(img, 0, 0);
+  return toBlob(canvas, 0.92);
 }
 
 /** Grayscale + contrast stretch (ignoring the 2% darkest/brightest pixels), in place. */

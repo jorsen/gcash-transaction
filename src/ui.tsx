@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { enhanceForViewing } from './image';
 import { PasswordInput } from './PasswordInput';
 
 /* ------------------------------------------------------------------ */
@@ -8,14 +9,74 @@ import { PasswordInput } from './PasswordInput';
 /** How much the magnifying glass enlarges. */
 const LENS_ZOOM = 2.5;
 
+/** The picture the lightbox is showing right now (the enhanced copy when that's on). */
+function shownImage(body: HTMLElement | null): HTMLImageElement | null {
+  return [...(body?.querySelectorAll('img') ?? [])].find((i) => i.getBoundingClientRect().width > 0) ?? null;
+}
+
 /**
  * Shows a picture full screen on a dark backdrop. Closes with the X, a tap on the backdrop,
  * or Escape. Magnifying glass: hold and drag on the picture (phone) or move the mouse over it
  * (computer) to see that spot enlarged. On touch the lens sits above the finger so it isn't covered.
+ * Enhance: a sharper, higher-contrast copy (easier to read a blurry photo). Download: saves the
+ * picture as shown (enhanced or original).
  */
 export function Lightbox({ onClose, children, label = 'Receipt' }: { onClose: () => void; children: ReactNode; label?: string }) {
+  const ui = useUi();
   const bodyRef = useRef<HTMLDivElement>(null);
   const [lens, setLens] = useState<{ left: number; top: number; size: number; bg: string; bgSize: string; bgPos: string } | null>(null);
+  const [enhanced, setEnhanced] = useState<{ blob: Blob; url: string } | null>(null);
+  const [busy, setBusy] = useState<'' | 'enhance' | 'download'>('');
+
+  // Free the enhanced copy when it's replaced or the lightbox closes.
+  useEffect(() => () => void (enhanced && URL.revokeObjectURL(enhanced.url)), [enhanced]);
+
+  /** The original picture as a file (blob: URL or the app's own image URL). */
+  const originalBlob = async () => {
+    const img = bodyRef.current?.querySelector('img:not(.lightbox-enhanced)') as HTMLImageElement | null;
+    if (!img?.currentSrc) throw new Error('The picture is still loading.');
+    const res = await fetch(img.currentSrc);
+    if (!res.ok) throw new Error(`Could not load the picture (${res.status}).`);
+    return res.blob();
+  };
+
+  const toggleEnhance = async () => {
+    if (enhanced) {
+      setEnhanced(null);
+      return;
+    }
+    setBusy('enhance');
+    try {
+      const blob = await enhanceForViewing(await originalBlob());
+      setEnhanced({ blob, url: URL.createObjectURL(blob) });
+    } catch (e) {
+      ui.toast(e instanceof Error ? e.message : String(e), 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const download = async () => {
+    setBusy('download');
+    try {
+      const blob = enhanced?.blob ?? (await originalBlob());
+      const ext = blob.type === 'image/png' ? 'png' : blob.type === 'image/webp' ? 'webp' : 'jpg';
+      const n = new Date();
+      const two = (v: number) => String(v).padStart(2, '0');
+      const stamp = `${n.getFullYear()}${two(n.getMonth() + 1)}${two(n.getDate())}-${two(n.getHours())}${two(n.getMinutes())}`; // local time
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `receipt-${stamp}${enhanced ? '-enhanced' : ''}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+    } catch (e) {
+      ui.toast(e instanceof Error ? e.message : String(e), 'error');
+    } finally {
+      setBusy('');
+    }
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -30,7 +91,7 @@ export function Lightbox({ onClose, children, label = 'Receipt' }: { onClose: ()
 
   /** Moves the lens to the pointer; hides it when the pointer is off the picture. */
   const magnify = (e: ReactPointerEvent) => {
-    const img = bodyRef.current?.querySelector('img');
+    const img = shownImage(bodyRef.current);
     if (!img || !img.currentSrc) return;
     const r = img.getBoundingClientRect();
     const x = e.clientX - r.left;
@@ -74,7 +135,8 @@ export function Lightbox({ onClose, children, label = 'Receipt' }: { onClose: ()
         onContextMenu={(e) => e.preventDefault()} // long-press opens the lens, not the "save image" menu
         onPointerLeave={() => setLens(null)}
       >
-        {children}
+        {enhanced && <img className="lightbox-enhanced" src={enhanced.url} alt={`${label} (enhanced)`} />}
+        <div style={{ display: enhanced ? 'none' : 'contents' }}>{children}</div>
       </div>
       {lens && (
         <div
@@ -91,9 +153,17 @@ export function Lightbox({ onClose, children, label = 'Receipt' }: { onClose: ()
           }}
         />
       )}
-      <p className="lightbox-hint" onClick={(e) => e.stopPropagation()}>
-        Hold and drag on the picture to magnify
-      </p>
+      <div className="lightbox-bar" onClick={(e) => e.stopPropagation()}>
+        <span className="lightbox-hint">Hold and drag on the picture to magnify</span>
+        <div className="lightbox-actions">
+          <button type="button" className={`lightbox-btn ${enhanced ? 'on' : ''}`} aria-pressed={Boolean(enhanced)} onClick={toggleEnhance} disabled={busy !== ''}>
+            <Icon name="sparkle" size={18} /> {busy === 'enhance' ? 'Enhancing…' : enhanced ? 'Enhanced' : 'Enhance'}
+          </button>
+          <button type="button" className="lightbox-btn" onClick={download} disabled={busy !== ''}>
+            <Icon name="download" size={18} /> {busy === 'download' ? 'Saving…' : 'Download'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -118,6 +188,7 @@ const paths = {
   bell: 'M12 22a2.5 2.5 0 0 0 2.5-2.5h-5A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.8V3a1.5 1.5 0 0 0-3 0v1.2A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z',
   users: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-3.3 0-7 1.7-7 4.5V20h14v-2.5C16 14.7 12.3 13 9 13Zm8.5-2a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm.5 2c-.6 0-1.2.1-1.8.2 1.4 1 2.3 2.5 2.3 4.3V20H23v-2.5c0-2.6-2.9-4.5-5-4.5Z',
   download: 'M11 3h2v9.2l3.6-3.6L18 10l-6 6-6-6 1.4-1.4 3.6 3.6V3ZM4 18h16v2H4v-2Z',
+  sparkle: 'M9 2l1.8 4.2L15 8l-4.2 1.8L9 14l-1.8-4.2L3 8l4.2-1.8L9 2Zm9 9 1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1 1-2.5Z',
   key: 'M7 14a3 3 0 1 1 0-6 3 3 0 0 1 0 6Zm5.6-4A6 6 0 1 0 12.6 14H17v3h3v-3h2v-4h-9.4Z',
   logout: 'M10 17l1.4-1.4-2.6-2.6H20v-2H8.8l2.6-2.6L10 7l-5 5 5 5ZM4 3h8v2H4v14h8v2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z',
   store: 'M4 4h16l1 5a3 3 0 0 1-2 2.8V20H5v-8.2A3 3 0 0 1 3 9l1-5Zm3 9v5h10v-5H7Z',
