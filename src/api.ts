@@ -232,7 +232,7 @@ export const api = {
     const p = new URLSearchParams();
     if (q.businessId) p.set('businessId', String(q.businessId));
     if (q.pendingOnly) p.set('status', 'pending');
-    return request<{ items: CashinRequest[]; pending: number }>('GET', `cashin?${p}`);
+    return request<{ items: CashinRequest[]; pending: number; now?: string }>('GET', `cashin?${p}`);
   },
   addCashin: (b: {
     number: string;

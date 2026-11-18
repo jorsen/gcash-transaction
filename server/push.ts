@@ -16,7 +16,7 @@ export interface PushPayload {
   /** Keep the notification on screen until it is tapped or dismissed (e.g. cash-in requests). */
   sticky?: boolean;
   /** Lets an open app react instantly (chime + "Cash in po!") without waiting for its next check. */
-  event?: 'request' | 'remind' | 'done';
+  event?: 'request' | 'remind' | 'done' | 'processing';
   kind?: 'cashin' | 'cashout' | 'payment';
 }
 

@@ -8,7 +8,7 @@ import { readRefLine, recognizePasses } from './ocr';
 import { looksLikeBankTransfer, parseBankTransfer } from './parseBank';
 import { countOf, dateFromReadings, formatDateTime, majority, parseGcashReceipt, parseRefTail, REF_TAIL, voteAmount } from './parseGcash';
 import { peso, prettyDate } from './format';
-import { markLocalAction } from './sound';
+import { markLocalAction, playChime } from './sound';
 import { Icon, Lightbox, SkeletonRows, useUi } from './ui';
 
 /** "09171234567" -> "0917 123 4567" */
@@ -42,6 +42,51 @@ function timeAgo(iso: string) {
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `${hrs} hr${hrs === 1 ? '' : 's'} ago`;
   return new Date(iso).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+/** Server time minus this phone's time (ms), so timers are right even if the phone's clock is off. */
+let clockOffset = 0;
+const serverNow = () => Date.now() + clockOffset;
+
+/** 204 s -> "3:24", 3725 s -> "1:02:05". */
+function clock(ms: number) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
+/** Minutes after which a still-waiting request's timer turns red. */
+const LATE_MINUTES = 5;
+
+/**
+ * Running time of a request, ticking every second while it's open:
+ * waiting -> "⏱ Waiting 3:24"; processing -> "⏱ Processing 1:05 · waited 3:24"; done -> "Done in 4:29".
+ */
+function RunningTime({ r }: { r: CashinRequest }) {
+  const open = r.status === 'pending' || r.status === 'processing';
+  const [now, setNow] = useState(serverNow);
+  useEffect(() => {
+    if (!open) return;
+    const t = setInterval(() => setNow(serverNow()), 1000);
+    return () => clearInterval(t);
+  }, [open]);
+  const created = Date.parse(r.createdAt);
+  if (r.status === 'pending') {
+    const late = now - created >= LATE_MINUTES * 60_000;
+    return <span className={`run-time waiting ${late ? 'late' : ''}`}>⏱ Waiting {clock(now - created)}</span>;
+  }
+  if (r.status === 'processing') {
+    const p = r.processingAt ? Date.parse(r.processingAt) : now;
+    return (
+      <span className="run-time processing">
+        ⏱ Processing {clock(now - p)} · waited {clock(p - created)}
+      </span>
+    );
+  }
+  if (r.status === 'done' && r.handledAt) return <span className="run-time done">Done in {clock(Date.parse(r.handledAt) - created)}</span>;
+  return null;
 }
 
 async function copyText(text: string) {
@@ -373,9 +418,22 @@ export function CashIn({
     }
   };
 
+  /** Status of each request at the last load, to notice "the owner started processing mine". */
+  const lastStatus = useRef<Map<number, CashinRequest['status']> | null>(null);
   const load = useCallback(async () => {
     try {
       const r = await api.cashin({ businessId });
+      if (r.now) clockOffset = Date.parse(r.now) - Date.now();
+      // Tindera: a request of hers went from waiting to processing -> tell her right away.
+      const prev = lastStatus.current;
+      if (prev && !isManager) {
+        const started = r.items.filter((x) => x.status === 'processing' && prev.get(x.id) === 'pending' && x.createdBy === user.id);
+        for (const x of started) {
+          playChime('receipt');
+          ui.toast(`⏳ ${x.processingByName ?? 'The owner'} is processing your ${KIND_INFO[x.kind].label.toLowerCase()} now${x.amount !== null ? ` · ${peso(x.amount)}` : ''}`, 'info');
+        }
+      }
+      lastStatus.current = new Map(r.items.map((x) => [x.id, x.status]));
       setItems(r.items);
       onPendingChange(r.pending);
       setError('');
@@ -384,7 +442,7 @@ export function CashIn({
     } finally {
       setLoading(false);
     }
-  }, [businessId, onPendingChange]);
+  }, [businessId, onPendingChange, isManager, user.id, ui]);
 
   // Load now, and again whenever the realtime stamp says something changed.
   useEffect(() => {
@@ -557,6 +615,7 @@ export function CashIn({
         {r.amount !== null && <span className="cashin-amount">{peso(r.amount)}</span>}
       </div>
       {r.gcashName && <MaskedName name={r.gcashName} />}
+      <RunningTime r={r} />
       {(r.source === 'bank' || r.refNo) && (
         <div className="row-sub">
           {r.source === 'bank' ? 'InstaPay / bank transfer to GCash' : 'GCash'}

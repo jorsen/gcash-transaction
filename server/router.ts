@@ -741,7 +741,8 @@ async function route(req: Request): Promise<Response> {
         ORDER BY (c.status IN ('pending', 'processing')) DESC, c.created_at DESC LIMIT 200`,
       params,
     );
-    return json({ items, pending });
+    // Server time, so the app's running timers are right even if the phone's clock is off.
+    return json({ items, pending, now: new Date().toISOString() });
   }
 
   if (path === 'cashin' && m === 'POST') {
@@ -986,6 +987,23 @@ async function route(req: Request): Promise<Response> {
         targetType: 'cashin',
         targetId: id,
       });
+      // Tell the tindera who asked that the owner is on it now.
+      if (r.createdBy !== me.id) {
+        const label = KINDS[r.kind].Label;
+        const who = describeRequest(r);
+        await notifyUsers(
+          [r.createdBy],
+          {
+            title: `⏳ ${label} is being processed${r.amount ? ` · ${peso(r.amount)}` : ''}`,
+            body: `${me.name} is working on it now${who ? ` · ${who}` : ''}`,
+            url: '/?view=cashin',
+            tag: `cashin-${id}`, // replaced by the "sent / received ✓" notification later
+            event: 'processing',
+            kind: r.kind,
+          },
+          url.origin,
+        );
+      }
       return json({ ok: true });
     }
     let txnId: number | null = null;
