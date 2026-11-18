@@ -61,9 +61,19 @@ export async function recognizeText(file: Blob, progress?: (label: string) => vo
 }
 
 /**
+ * How the ref strip is re-read: sharpening strength and strip heights (px). Tuned in a real browser on
+ * blurry phone photos: unsharpened strips read wrong digits consistently ("30044" for 58844), these
+ * settings read the right ones at several sizes and never agreed on a wrong value.
+ */
+const REF_READS: { sharpen: number; heights: number[] }[] = [
+  { sharpen: 0.7, heights: [100, 130, 220] },
+  { sharpen: 1.2, heights: [100, 220, 260] },
+];
+
+/**
  * Second look at just the reference number: finds its line on the receipt, then reads only that
- * strip, enlarged to a few sizes, digits only. Blurry photos that read as junk on the whole receipt
- * ("Ref ds 302? She 158844") often read correctly this way. Returns the last-5 guess of each size.
+ * strip, sharpened and enlarged to a few sizes, digits only. Blurry photos that read as junk on the
+ * whole receipt ("Ref ds 302? She 158844") often read correctly this way. Returns each reading's last-5 guess.
  */
 export async function readRefTails(file: Blob, crop: CropBox | undefined, progress?: (label: string) => void): Promise<string[]> {
   onProgress = null;
@@ -91,9 +101,11 @@ export async function readRefTails(file: Blob, crop: CropBox | undefined, progre
     const tails: string[] = [];
     await worker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_LINE, tessedit_char_whitelist: '0123456789 ' });
     try {
-      for (const height of [130, 170, 260]) {
-        const text = (await worker.recognize(await prepareForOcr(file, { crop: strip, enhance: true, height }))).data.text;
-        tails.push(refTailFromDigits(text));
+      for (const { sharpen, heights } of REF_READS) {
+        for (const height of heights) {
+          const text = (await worker.recognize(await prepareForOcr(file, { crop: strip, enhance: true, height, sharpen }))).data.text;
+          tails.push(refTailFromDigits(text));
+        }
       }
     } finally {
       await worker.setParameters({ tessedit_pageseg_mode: PSM.AUTO, tessedit_char_whitelist: '' });

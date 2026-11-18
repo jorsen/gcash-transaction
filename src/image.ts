@@ -133,9 +133,13 @@ export async function findReceiptCard(file: Blob): Promise<CropBox | null> {
  * - crop: keep just the receipt (photos of a phone screen have lots of background that confuses OCR)
  * - enhance: grayscale + contrast stretch, which helps a lot with glare / beige screens / cracks
  */
-export async function prepareForOcr(file: Blob, opts: { crop?: CropBox; enhance?: boolean; height?: number } = {}): Promise<HTMLCanvasElement> {
+export async function prepareForOcr(
+  file: Blob,
+  opts: { crop?: CropBox; enhance?: boolean; height?: number; sharpen?: number } = {},
+): Promise<HTMLCanvasElement> {
   const full = await drawScaled(file, 2200);
   let canvas = full;
+  let scale = 1;
   if (!opts.crop && full.width < 1100) {
     // Small / compressed screenshots (e.g. forwarded through Messenger): enlarge so letters are big enough to read.
     const scale = Math.min(2.5, 1100 / full.width);
@@ -153,7 +157,7 @@ export async function prepareForOcr(file: Blob, opts: { crop?: CropBox; enhance?
     const sw = Math.max(1, Math.round(w * full.width));
     const sh = Math.max(1, Math.round(h * full.height));
     // Enlarge small crops so text is ~1200 px wide (OCR likes bigger letters), or to exactly `height` px tall.
-    const scale = opts.height ? Math.min(10, opts.height / sh) : Math.min(3, Math.max(1, 1200 / sw));
+    scale = opts.height ? Math.min(10, opts.height / sh) : Math.min(3, Math.max(1, 1200 / sw));
     canvas = document.createElement('canvas');
     canvas.width = Math.round(sw * scale);
     canvas.height = Math.round(sh * scale);
@@ -162,7 +166,46 @@ export async function prepareForOcr(file: Blob, opts: { crop?: CropBox; enhance?
     ctx.drawImage(full, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
   }
   if (opts.enhance) enhanceForOcr(canvas);
+  // Blur grows with enlargement, so the sharpening radius does too.
+  if (opts.sharpen) sharpenGray(canvas, opts.sharpen, Math.max(1, Math.round(scale * 1.5)));
   return canvas;
+}
+
+/**
+ * Unsharp mask on a grayscale canvas (in place): each pixel moves away from its blurred surroundings,
+ * so soft letter edges get crisp again. amount ~1 = moderate; radius in pixels.
+ */
+function sharpenGray(canvas: HTMLCanvasElement, amount: number, radius: number) {
+  const ctx = canvas.getContext('2d')!;
+  const { width: w, height: h } = canvas;
+  const img = ctx.getImageData(0, 0, w, h);
+  const d = img.data;
+  const g = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) g[i] = d[i * 4];
+  // Box blur, horizontal then vertical (running sums: fast at any radius).
+  const tmp = new Float32Array(w * h);
+  const blur = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    let sum = 0;
+    for (let x = -radius; x <= radius; x++) sum += g[y * w + Math.min(w - 1, Math.max(0, x))];
+    for (let x = 0; x < w; x++) {
+      tmp[y * w + x] = sum / (2 * radius + 1);
+      sum += g[y * w + Math.min(w - 1, x + radius + 1)] - g[y * w + Math.max(0, x - radius)];
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let sum = 0;
+    for (let y = -radius; y <= radius; y++) sum += tmp[Math.min(h - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < h; y++) {
+      blur[y * w + x] = sum / (2 * radius + 1);
+      sum += tmp[Math.min(h - 1, y + radius + 1) * w + x] - tmp[Math.max(0, y - radius) * w + x];
+    }
+  }
+  for (let i = 0; i < w * h; i++) {
+    const v = Math.max(0, Math.min(255, g[i] + amount * (g[i] - blur[i])));
+    d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v;
+  }
+  ctx.putImageData(img, 0, 0);
 }
 
 /** Grayscale + contrast stretch (ignoring the 2% darkest/brightest pixels), in place. */

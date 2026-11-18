@@ -159,14 +159,18 @@ const MONEY_ISH = /\d[.,]\d{2}\b/;
  */
 export function findRefLine(lines: OcrLine[]): OcrLine['bbox'] | null {
   const clean = lines.filter((l) => l.text.trim());
-  const isPhone = (t: string) => PHONE.test(t) || /[+*]?6[38]\s?\d{3}\s?\d{3}/.test(t);
-  let line =
+  const digitRun = (l: OcrLine) => /\d{5,}/.test(l.text.replace(/(\d) (\d)/g, '$1$2')) && !MONEY_ISH.test(l.text);
+  // On GCash receipts the ref line comes right after the total. "Total" itself is often garbled on a
+  // blurry photo ("Fotos Amos fen ₱350.00"), so the last money line counts as the total too.
+  let anchor = clean.findIndex((l) => /total/i.test(l.text));
+  if (anchor < 0) anchor = clean.map((l) => MONEY_ISH.test(l.text)).lastIndexOf(true);
+  const below = anchor >= 0 ? clean.slice(anchor + 1) : [];
+  const line =
     clean.find((l) => /\bref\b|ref\s*n|reference/i.test(l.text) && /\d{3}/.test(l.text)) ??
-    clean.find((l) => /\d{5,}/.test(l.text.replace(/(\d) (\d)/g, '$1$2')) && !MONEY_ISH.test(l.text) && !isPhone(l.text));
-  if (!line) {
-    const total = clean.findIndex((l) => /total/i.test(l.text));
-    if (total >= 0) line = clean[total + 1];
-  }
+    below.find(digitRun) ??
+    below.find((l) => /\d{3}/.test(l.text) && !MONEY_ISH.test(l.text) && !/amount|total|sent|[₱£€]/i.test(l.text)) ??
+    // No total found: a long run of digits that isn't a mobile number (those sit above the amount).
+    (anchor < 0 ? clean.find((l) => digitRun(l) && !PHONE.test(l.text) && !/[+*]?6[38]\s?\d{3}\s?\d{3}/.test(l.text)) : undefined);
   if (!line) return null;
   const { x0, y0, x1, y1 } = line.bbox;
   return { x0, y0, x1: DATE_ISH.test(line.text) ? x0 + (x1 - x0) * 0.62 : x1, y1 };
